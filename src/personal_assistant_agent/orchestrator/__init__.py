@@ -12,6 +12,7 @@ from .state import (
     Plan,
     PlanStep,
     RunStatus,
+    StopReason,
     TenantContext,
 )
 from .tools import EmptyInput, StrictInput, Tool, ToolRegistry, UnknownToolError
@@ -30,6 +31,7 @@ __all__ = [
     "RuleBasedPlanner",
     "RunStatus",
     "StaticPlanner",
+    "StopReason",
     "StrictInput",
     "TenantContext",
     "Tool",

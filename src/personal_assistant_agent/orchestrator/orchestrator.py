@@ -17,6 +17,10 @@ And enforces, on every run:
     - a limit on the number of steps,
     - tool permission checks, with human approval for anything
       above the auto allowed level.
+
+Run statuses follow the task state model in Blueprint section 7.2:
+queued, running, waiting_for_approval, completed, failed, cancelled.
+Why a run stopped lives in StopReason, separate from the status.
 """
 
 from __future__ import annotations
@@ -36,6 +40,7 @@ from .state import (
     Observation,
     PlanStep,
     RunStatus,
+    StopReason,
     TenantContext,
 )
 from .tools import Tool, ToolRegistry, UnknownToolError
@@ -74,10 +79,24 @@ class AgentOrchestrator:
             )
         started = time.monotonic()
         state = AgentState(request=request, tenant=context)
+        state.status = RunStatus.RUNNING
         state.log("request_received")
+        try:
+            return self._run(state, started)
+        except Exception as exc:  # noqa: BLE001, internal errors become FAILED
+            state.log(f"internal_error type={type(exc).__name__}")
+            return self._finish(
+                state,
+                RunStatus.FAILED,
+                StopReason.INTERNAL_ERROR,
+                "the task failed with an internal error",
+            )
 
+    # ---------------------------------------------------------------
+    def _run(self, state: AgentState, started: float) -> AgentResult:
         # 1. Understand Intent
-        state.intent = self.intent_understanding.understand(request)
+        assert state.tenant is not None
+        state.intent = self.intent_understanding.understand(state.request)
         state.log(f"intent_understood kind={state.intent.kind}")
 
         # Plan, execute, verify loop. Replans are bounded.
@@ -98,23 +117,24 @@ class AgentOrchestrator:
 
             if verification.achieved:
                 # Yes -> Verify and Return Result
-                return AgentResult(
-                    status=RunStatus.COMPLETED,
+                return self._finish(
+                    state,
+                    RunStatus.COMPLETED,
+                    StopReason.GOAL_ACHIEVED,
+                    verification.reason,
                     answer=verification.answer,
-                    state=state,
-                    reason=verification.reason,
                 )
 
-            # No -> Replan if budget remains, otherwise Ask the User
+            # No -> Replan if budget remains, otherwise stop as failed
             if state.replans_used < self.limits.max_replans:
                 state.replans_used += 1
                 state.log(f"replanning attempt={state.replans_used}")
                 continue
-            return AgentResult(
-                status=RunStatus.ASK_USER,
-                answer=None,
-                state=state,
-                reason=("goal not achieved after replans: " + verification.reason),
+            return self._finish(
+                state,
+                RunStatus.FAILED,
+                StopReason.GOAL_NOT_ACHIEVED,
+                "goal not achieved after replans: " + verification.reason,
             )
 
     # ---------------------------------------------------------------
@@ -132,22 +152,22 @@ class AgentOrchestrator:
             # Limit: total execution time
             if self._elapsed(started) > self.limits.max_execution_seconds:
                 state.log("limit_hit execution_time")
-                return AgentResult(
-                    status=RunStatus.TIMEOUT,
-                    answer=None,
-                    state=state,
-                    reason="execution time limit exceeded",
+                return self._finish(
+                    state,
+                    RunStatus.FAILED,
+                    StopReason.TIMEOUT,
+                    "execution time limit exceeded",
                     pending_step=step,
                 )
 
             # Limit: number of steps
             if state.steps_executed >= self.limits.max_steps:
                 state.log("limit_hit max_steps")
-                return AgentResult(
-                    status=RunStatus.STEP_LIMIT_EXCEEDED,
-                    answer=None,
-                    state=state,
-                    reason="step limit exceeded",
+                return self._finish(
+                    state,
+                    RunStatus.FAILED,
+                    StopReason.STEP_LIMIT,
+                    "step limit exceeded",
                     pending_step=step,
                 )
 
@@ -156,42 +176,35 @@ class AgentOrchestrator:
                 tool = self.registry.get(step.tool_name)
             except UnknownToolError as exc:
                 state.log(f"tool_unknown name={step.tool_name}")
-                return AgentResult(
-                    status=RunStatus.ASK_USER,
-                    answer=None,
-                    state=state,
-                    reason=str(exc),
+                return self._finish(
+                    state,
+                    RunStatus.FAILED,
+                    StopReason.UNKNOWN_TOOL,
+                    str(exc),
                     pending_step=step,
                 )
             state.log(f"tool_chosen step={step.id} tool={tool.name}")
 
             # Limit: tool permissions
             if self.policy.requires_approval(tool.permission):
-                approved = (
-                    self.approval_callback(step, tool)
-                    if self.approval_callback is not None
-                    else False
-                )
                 if self.approval_callback is None:
                     state.log(f"approval_required tool={tool.name}")
-                    return AgentResult(
-                        status=RunStatus.ASK_USER,
-                        answer=None,
-                        state=state,
-                        reason=(
-                            f"tool {tool.name} needs human approval "
-                            f"({tool.permission.name}) and no approval "
-                            "callback is configured"
-                        ),
+                    return self._finish(
+                        state,
+                        RunStatus.WAITING_FOR_APPROVAL,
+                        StopReason.APPROVAL_REQUIRED,
+                        f"tool {tool.name} needs human approval "
+                        f"({tool.permission.name}) and no approval "
+                        "callback is configured",
                         pending_step=step,
                     )
-                if not approved:
+                if not self.approval_callback(step, tool):
                     state.log(f"approval_denied tool={tool.name}")
-                    return AgentResult(
-                        status=RunStatus.PERMISSION_DENIED,
-                        answer=None,
-                        state=state,
-                        reason=f"approval denied for tool {tool.name}",
+                    return self._finish(
+                        state,
+                        RunStatus.FAILED,
+                        StopReason.PERMISSION_DENIED,
+                        f"approval denied for tool {tool.name}",
                         pending_step=step,
                     )
                 state.log(f"approval_granted tool={tool.name}")
@@ -217,8 +230,8 @@ class AgentOrchestrator:
         except ValidationError as exc:
             detail = "; ".join(
                 f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}"
-                for e in getattr(exc, "errors", list)()
-            ) or str(exc)
+                for e in exc.errors()
+            )
             error = f"ValidationError: {detail}"
             state.observations.append(
                 Observation(
@@ -231,11 +244,11 @@ class AgentOrchestrator:
                 )
             )
             state.log(f"tool_validation_failed step={step.id} error={error}")
-            return AgentResult(
-                status=RunStatus.ASK_USER,
-                answer=None,
-                state=state,
-                reason=(f"tool arguments for {tool.name} failed validation: {detail}"),
+            return self._finish(
+                state,
+                RunStatus.FAILED,
+                StopReason.VALIDATION_ERROR,
+                f"tool arguments for {tool.name} failed validation: {detail}",
                 pending_step=step,
             )
         max_attempts = 1 + self.limits.max_retries_per_step
@@ -243,11 +256,11 @@ class AgentOrchestrator:
         for attempt in range(1, max_attempts + 1):
             if self._elapsed(started) > self.limits.max_execution_seconds:
                 state.log("limit_hit execution_time during step")
-                return AgentResult(
-                    status=RunStatus.TIMEOUT,
-                    answer=None,
-                    state=state,
-                    reason="execution time limit exceeded",
+                return self._finish(
+                    state,
+                    RunStatus.FAILED,
+                    StopReason.TIMEOUT,
+                    "execution time limit exceeded",
                     pending_step=step,
                 )
             t0 = time.monotonic()
@@ -260,13 +273,13 @@ class AgentOrchestrator:
                         f"({duration:.3f}s > "
                         f"{self.limits.per_tool_timeout_seconds}s)"
                     )
-                if self._elapsed(started) > (self.limits.max_execution_seconds):
+                if self._elapsed(started) > self.limits.max_execution_seconds:
                     state.log("limit_hit execution_time after tool")
-                    return AgentResult(
-                        status=RunStatus.TIMEOUT,
-                        answer=None,
-                        state=state,
-                        reason="execution time limit exceeded",
+                    return self._finish(
+                        state,
+                        RunStatus.FAILED,
+                        StopReason.TIMEOUT,
+                        "execution time limit exceeded",
                         pending_step=step,
                     )
                 state.observations.append(
@@ -299,15 +312,34 @@ class AgentOrchestrator:
                     f"tool_failed step={step.id} attempt={attempt} error={last_error}"
                 )
         state.steps_executed += 1
-        # Retries exhausted -> Ask the User, never fail silently.
-        return AgentResult(
-            status=RunStatus.ASK_USER,
-            answer=None,
-            state=state,
-            reason=(
-                f"step {step.id} failed after {max_attempts} attempts: {last_error}"
-            ),
+        # Retries exhausted -> stop as failed, never fail silently.
+        return self._finish(
+            state,
+            RunStatus.FAILED,
+            StopReason.RETRIES_EXHAUSTED,
+            f"step {step.id} failed after {max_attempts} attempts: {last_error}",
             pending_step=step,
+        )
+
+    # ---------------------------------------------------------------
+    @staticmethod
+    def _finish(
+        state: AgentState,
+        status: RunStatus,
+        stop_reason: StopReason,
+        reason: str,
+        answer: str | None = None,
+        pending_step: PlanStep | None = None,
+    ) -> AgentResult:
+        state.status = status
+        return AgentResult(
+            status=status,
+            answer=answer,
+            state=state,
+            reason=reason,
+            pending_step=pending_step,
+            stop_reason=stop_reason,
+            error_summary=reason if status is RunStatus.FAILED else "",
         )
 
     @staticmethod

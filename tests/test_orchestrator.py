@@ -4,6 +4,7 @@ import pytest
 
 from personal_assistant_agent.orchestrator import (
     AgentOrchestrator,
+    AgentState,
     OrchestratorLimits,
     PermissionLevel,
     PermissionPolicy,
@@ -11,6 +12,7 @@ from personal_assistant_agent.orchestrator import (
     PlanStep,
     RunStatus,
     StaticPlanner,
+    StopReason,
     StrictInput,
     TenantContext,
     Tool,
@@ -58,7 +60,8 @@ def test_step_limit_is_enforced():
         limits=OrchestratorLimits(max_steps=2),
     )
     result = agent.run("many steps", context=CTX)
-    assert result.status is RunStatus.STEP_LIMIT_EXCEEDED
+    assert result.status is RunStatus.FAILED
+    assert result.stop_reason is StopReason.STEP_LIMIT
     assert result.pending_step is not None
 
 
@@ -81,7 +84,8 @@ def test_execution_time_limit_is_enforced():
         limits=OrchestratorLimits(max_execution_seconds=0.05, max_retries_per_step=0),
     )
     result = agent.run("slow", context=CTX)
-    assert result.status in (RunStatus.TIMEOUT, RunStatus.ASK_USER)
+    assert result.status is RunStatus.FAILED
+    assert result.stop_reason is StopReason.TIMEOUT
 
 
 def test_external_tool_without_approval_callback_asks_user():
@@ -101,7 +105,7 @@ def test_external_tool_without_approval_callback_asks_user():
     result = AgentOrchestrator(registry=registry, planner=StaticPlanner(plan)).run(
         "send it", context=CTX
     )
-    assert result.status is RunStatus.ASK_USER
+    assert result.status is RunStatus.WAITING_FOR_APPROVAL
     assert "approval" in result.reason
 
 
@@ -147,7 +151,8 @@ def test_external_tool_with_denial_is_permission_denied():
         planner=StaticPlanner(plan),
         approval_callback=lambda step, tool: False,
     ).run("send it", context=CTX)
-    assert result.status is RunStatus.PERMISSION_DENIED
+    assert result.status is RunStatus.FAILED
+    assert result.stop_reason is StopReason.PERMISSION_DENIED
 
 
 def test_sensitive_tool_needs_approval_even_under_loose_policy():
@@ -171,7 +176,7 @@ def test_sensitive_tool_needs_approval_even_under_loose_policy():
         planner=StaticPlanner(plan),
         policy=PermissionPolicy(auto_allow_up_to=PermissionLevel.READ),
     ).run("danger", context=CTX)
-    assert result.status is RunStatus.ASK_USER
+    assert result.status is RunStatus.WAITING_FOR_APPROVAL
 
 
 def test_retry_then_success():
@@ -224,7 +229,7 @@ def test_retries_exhausted_asks_user():
         planner=StaticPlanner(plan),
         limits=OrchestratorLimits(max_retries_per_step=1),
     ).run("broken", context=CTX)
-    assert result.status is RunStatus.ASK_USER
+    assert result.status is RunStatus.FAILED
     assert "boom" in result.reason
 
 
@@ -234,7 +239,7 @@ def test_unknown_tool_asks_user():
         steps=[PlanStep(id="s1", description="ghost", tool_name="does_not_exist")],
     )
     result = orchestrator(planner=StaticPlanner(plan)).run("ghost", context=CTX)
-    assert result.status is RunStatus.ASK_USER
+    assert result.status is RunStatus.FAILED
     assert "unknown tool" in result.reason
 
 
@@ -274,7 +279,7 @@ def test_validation_missing_field_never_runs():
     result = AgentOrchestrator(registry=registry, planner=StaticPlanner(plan)).run(
         "search", context=CTX
     )
-    assert result.status is RunStatus.ASK_USER
+    assert result.status is RunStatus.FAILED
     assert "validation" in result.reason
     assert called == []
     assert any(
@@ -309,7 +314,7 @@ def test_validation_wrong_type_rejected():
     result = AgentOrchestrator(registry=registry, planner=StaticPlanner(plan)).run(
         "search", context=CTX
     )
-    assert result.status is RunStatus.ASK_USER
+    assert result.status is RunStatus.FAILED
     assert called == []
 
 
@@ -339,7 +344,7 @@ def test_validation_extra_field_rejected():
     result = AgentOrchestrator(registry=registry, planner=StaticPlanner(plan)).run(
         "search", context=CTX
     )
-    assert result.status is RunStatus.ASK_USER
+    assert result.status is RunStatus.FAILED
     assert "validation" in result.reason
     assert called == []
 
@@ -436,7 +441,7 @@ def test_cross_workspace_tool_access_fails():
     assert own.answer == "document content"
 
     other = agent.run("read", context=OTHER_CTX)
-    assert other.status is not RunStatus.COMPLETED
+    assert other.status is RunStatus.FAILED
     assert any(
         o.error and "cross workspace" in o.error for o in other.state.observations
     )
@@ -468,6 +473,30 @@ def test_identity_cannot_be_spoofed_via_tool_args():
     result = AgentOrchestrator(registry=registry, planner=StaticPlanner(plan)).run(
         "read", context=CTX
     )
-    assert result.status is RunStatus.ASK_USER
+    assert result.status is RunStatus.FAILED
     assert "validation" in result.reason
     assert called == []
+
+
+def test_internal_error_becomes_failed_with_safe_summary():
+    class ExplodingPlanner:
+        def create_plan(self, intent, registry, observations):
+            raise RuntimeError("secret-db-password-123")
+
+    result = AgentOrchestrator(
+        registry=default_registry(), planner=ExplodingPlanner()
+    ).run("anything", context=CTX)
+    assert result.status is RunStatus.FAILED
+    assert result.stop_reason is StopReason.INTERNAL_ERROR
+    assert result.error_summary
+    assert "secret-db-password-123" not in result.error_summary
+    assert "secret-db-password-123" not in result.reason
+    assert result.state.status is RunStatus.FAILED
+
+
+def test_state_status_lifecycle():
+    fresh = AgentState(request="x")
+    assert fresh.status is RunStatus.QUEUED
+    result = orchestrator().run("calculate 2 + 2", context=CTX)
+    assert result.state.status is RunStatus.COMPLETED
+    assert result.stop_reason is StopReason.GOAL_ACHIEVED

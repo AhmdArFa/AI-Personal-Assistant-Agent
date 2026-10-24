@@ -49,11 +49,11 @@ The model proposes. The policy decides. Every tool is registered with a permissi
 | `EXTERNAL_EFFECT` | Sends, books, or changes something outside | Needs human approval |
 | `SENSITIVE` | Irreversible or high risk | Needs explicit approval every time |
 
-If a tool needs approval and no approval callback is configured, the run stops cleanly with `ask_user` and the pending step attached. It never proceeds silently.
+If a tool needs approval and no approval callback is configured, the run stops cleanly with `waiting_for_approval` and the pending step attached. It never proceeds silently.
 
 ### Run statuses
 
-`completed`, `ask_user`, `failed`, `timeout`, `step_limit_exceeded`, `permission_denied`. Every run also carries a full trace: request, intent, plan, each tool choice and execution, retries, approvals, and the verification verdict.
+Statuses follow the task state model: `queued`, `running`, `waiting_for_approval`, `completed`, `failed`, `cancelled`. Why a run stopped is reported separately in `stop_reason`: `goal_achieved`, `approval_required`, `permission_denied`, `timeout`, `step_limit_exceeded`, `validation_error`, `unknown_tool`, `retries_exhausted`, `goal_not_achieved`, `internal_error`. Failed runs carry a safe `error_summary` that never leaks internal exception details. Every run also carries a full trace: request, intent, plan, each tool choice and execution, retries, approvals, and the verification verdict.
 
 ## Quick start
 
@@ -65,11 +65,14 @@ python examples/demo.py
 
 ```python
 from personal_assistant_agent.orchestrator import (
-    AgentOrchestrator, default_registry,
+    AgentOrchestrator, TenantContext, default_registry,
 )
 
 agent = AgentOrchestrator(registry=default_registry())
-result = agent.run("calculate 19 * 3 + 1")
+result = agent.run(
+    "calculate 19 * 3 + 1",
+    context=TenantContext(user_id="u1", workspace_id="ws1"),
+)
 print(result.status, result.answer)  # completed 58
 ```
 
