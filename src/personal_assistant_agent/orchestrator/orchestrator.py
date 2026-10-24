@@ -37,6 +37,7 @@ from .cancellation import CancellationToken, RunCancelled
 from .checkpoints import CheckpointStore, serialize_state
 from .intent import IntentUnderstanding, RuleBasedIntentUnderstanding
 from .limits import OrchestratorLimits
+from .model_backed import PlanRejected
 from .permissions import PermissionPolicy
 from .planner import Planner, RuleBasedPlanner
 from .state import (
@@ -178,9 +179,18 @@ class AgentOrchestrator:
             if first_pass and reuse_existing_plan and state.plan is not None:
                 state.log(f"plan_restored steps={len(state.plan.steps)}")
             else:
-                state.plan = self.planner.create_plan(
-                    state.intent, self.registry, state.observations
-                )
+                try:
+                    state.plan = self.planner.create_plan(
+                        state.intent, self.registry, state.observations
+                    )
+                except PlanRejected as exc:
+                    state.log("plan_rejected")
+                    return self._finish(
+                        state,
+                        RunStatus.FAILED,
+                        StopReason.VALIDATION_ERROR,
+                        f"plan rejected: {exc}",
+                    )
                 state.log(f"plan_created steps={len(state.plan.steps)}")
             first_pass = False
             self._save_checkpoint(state)

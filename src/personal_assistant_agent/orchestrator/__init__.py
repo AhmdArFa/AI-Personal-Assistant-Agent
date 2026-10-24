@@ -20,6 +20,7 @@ from .documents import (
     seeded_corpus,
 )
 from .limits import OrchestratorLimits
+from .model_backed import GatewayIntentUnderstanding, GatewayPlanner, PlanRejected
 from .orchestrator import AgentOrchestrator
 from .permissions import PermissionLevel, PermissionPolicy
 from .planner import RuleBasedPlanner, StaticPlanner
@@ -48,6 +49,8 @@ __all__ = [
     "DocumentCorpus",
     "DocumentRecord",
     "EmptyInput",
+    "GatewayIntentUnderstanding",
+    "GatewayPlanner",
     "InMemoryAuditSink",
     "InMemoryCheckpointStore",
     "Intent",
@@ -56,6 +59,7 @@ __all__ = [
     "PermissionLevel",
     "PermissionPolicy",
     "Plan",
+    "PlanRejected",
     "PlanStep",
     "PostgresCheckpointStore",
     "Redactor",
