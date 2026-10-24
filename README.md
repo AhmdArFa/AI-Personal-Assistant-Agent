@@ -113,7 +113,8 @@ src/personal_assistant_agent/
     stub.py            Stub model adapter (the brief's fallback path)
     trial.py           The D2 trial: 30 tasks, runner, blind review pack
 migrations/            Alembic tenancy schema and opt-in RLS policies
-tests/                 97 tests covering the cycle, slice 2, and the platform
+tests/                 100 tests covering the cycle, slices, and the platform
+evals/                 Bilingual evaluation suite (python -m evals), a release gate
 examples/demo.py       End to end demo, including the permission gate
 docs/architecture.md   The canonical 10 layer model and invariants
 docs/ai-personal-agent-blueprint-v2.md   The adopted blueprint (version 2.0 revised)
