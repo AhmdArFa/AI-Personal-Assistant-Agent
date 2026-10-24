@@ -28,7 +28,7 @@ from .intent import IntentUnderstanding, RuleBasedIntentUnderstanding
 from .limits import OrchestratorLimits
 from .permissions import PermissionPolicy
 from .planner import Planner, RuleBasedPlanner
-from .state import AgentResult, AgentState, PlanStep, RunStatus
+from .state import AgentResult, AgentState, Observation, PlanStep, RunStatus
 from .tools import Tool, ToolRegistry, UnknownToolError
 from .verifier import DefaultVerifier, Verifier
 
@@ -189,7 +189,13 @@ class AgentOrchestrator:
         return None
 
     # ---------------------------------------------------------------
-    def _execute_step(self, state, step, tool, started) -> AgentResult | None:
+    def _execute_step(
+        self,
+        state: AgentState,
+        step: PlanStep,
+        tool: Tool,
+        started: float,
+    ) -> AgentResult | None:
         max_attempts = 1 + self.limits.max_retries_per_step
         last_error = ""
         for attempt in range(1, max_attempts + 1):
@@ -221,8 +227,6 @@ class AgentOrchestrator:
                         reason="execution time limit exceeded",
                         pending_step=step,
                     )
-                from .state import Observation
-
                 state.observations.append(
                     Observation(
                         step_id=step.id,
@@ -239,8 +243,6 @@ class AgentOrchestrator:
             except Exception as exc:  # noqa: BLE001, tool errors are observed
                 duration = time.monotonic() - t0
                 last_error = f"{type(exc).__name__}: {exc}"
-                from .state import Observation
-
                 state.observations.append(
                     Observation(
                         step_id=step.id,
