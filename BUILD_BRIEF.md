@@ -1,129 +1,142 @@
-# Build Brief: everything not yet built
+# Build Brief v2: what is actually left to build
+
+**Verified against:** `main` at commit `58b9d1d` (2026-10-24). `pytest -q` gives 75 passed; `ruff check src tests examples` is clean.
+
+**This brief replaces** `BUILD_BRIEF.md` and `BUILD_BRIEF_SLICE_2.md`. Both describe the repository before Slice 2 (12 tests, no tenant context) and must not be handed to anyone. Retire them.
 
 **For:** the engineer or coding agent implementing the next work.
-**Read first:** `docs/architecture.md`, `README.md`, and the Blueprint v2 (`ai-personal-agent-blueprint-v2.md`). This brief tells you what to build and in what order; the Blueprint is the specification and wins on any conflict.
+**Read first:** `README.md`, `docs/architecture.md`, `docs/ai-personal-agent-blueprint-v2.md`, `docs/decisions/D1-D2-decision-brief.md`. The Blueprint is the specification and wins on any conflict. Check the code before trusting any status line in any document; several are stale (see W1).
 
 ---
 
 ## 1. What exists (do not rebuild)
 
-Package `personal_assistant_agent`, `src/` layout, Python 3.11+, zero runtime dependencies so far.
+Package `personal_assistant_agent`, `src/` layout, Python 3.11+, runtime dependency: `pydantic>=2.6`; dev extras: pytest, ruff, fastapi, httpx.
 
-| Module | Role |
+### Orchestrator core (Step 1 and Slice 2, issues 1 to 14: complete)
+
+| Module | What it does |
 | --- | --- |
-| `orchestrator/orchestrator.py` | `AgentOrchestrator.run(request)`: intent, plan, tool choice, permission check, execute with retries, observe, verify, replan |
-| `orchestrator/limits.py` | `OrchestratorLimits` (max_steps, max_execution_seconds, max_retries_per_step, max_replans, per_tool_timeout_seconds) |
-| `orchestrator/permissions.py` | `PermissionLevel` (READ, WRITE_REVERSIBLE, EXTERNAL_EFFECT, SENSITIVE), `PermissionPolicy` |
-| `orchestrator/tools.py` | `Tool`, `ToolRegistry`, `UnknownToolError` |
-| `orchestrator/state.py` | `Intent`, `PlanStep`, `Plan`, `Observation`, `AgentState`, `AgentResult`, `RunStatus` |
+| `orchestrator/orchestrator.py` | `AgentOrchestrator.run(request, context=TenantContext)`, `resume(task_id, context)`, `decide_approval`; bounded loop, replans, checkpoint after every observation |
+| `orchestrator/limits.py` | Steps, time, retries, replans, per-tool timeout (daemon thread), `max_tool_calls`, `max_output_chars`, optional `max_tokens` and `max_cost` |
+| `orchestrator/state.py` | `TenantContext`, statuses `queued/running/waiting_for_approval/completed/failed/cancelled`, separate `stop_reason`, safe `error_summary` |
+| `orchestrator/tools.py` | `Tool`, `ToolRegistry`, `StrictInput` (Pydantic, `extra = forbid`) |
+| `orchestrator/permissions.py`, `approvals.py` | Four permission levels; SHA-256 argument-bound approvals |
+| `orchestrator/cancellation.py` | `CancellationToken` |
+| `orchestrator/checkpoints.py` | Memory, JSON file, and `PostgresCheckpointStore` (takes a connection factory such as psycopg) |
+| `orchestrator/audit.py` | Redactor and audit events |
+| `orchestrator/documents.py` | `search_documents`: tenant-scoped term scoring over a corpus interface, results labelled untrusted |
 | `orchestrator/intent.py`, `planner.py`, `verifier.py` | Protocols plus rule-based starters |
-| `orchestrator/builtin_tools.py` | `echo`, `get_current_time`, `calculator` |
-| `tests/test_orchestrator.py` | 12 tests, all must keep passing |
-| `.github/workflows/ci.yml` | `ruff check src tests examples` and `pytest -q` |
 
-Existing behavior to preserve: bounded runs, answers built only from observed tool results, a trace for every run, and the rule that the model proposes while the policy decides.
+### Platform foundation (Slice 1, built against stubs)
 
-## 2. Working rules (apply to every change)
+| Module | What it does |
+| --- | --- |
+| `platform/tenancy.py` | `TenancyStore` protocol and `InMemoryTenancyStore`: users, workspaces, membership, invitations (email must match), `resolve_membership` |
+| `platform/identity.py` | `IdentityProvider` protocol, `DevIdentityProvider` (dev only, supports revocation), `get_or_create_user` |
+| `platform/gateway.py` | `ModelGateway`, `ModelProvider` protocol, `BudgetLedger` (per-provider shares, abort at 80 percent of own share) |
+| `platform/stub.py` | `StubProvider` (deterministic, zero cost) |
+| `platform/trial.py` | The D2 trial harness: 30 tasks, runner, blind review pack |
+| `api.py` | FastAPI app with one endpoint: `GET /api/v1/tasks/{task_id}`, in header mode or platform mode (Bearer token plus database membership); other tenant's task returns 404 |
 
-1. **Identity is never taken from the client or the model.** It comes from the authenticated session or token only.
-2. **Every tool re-authorizes** against user and workspace inside the tool.
-3. **Every tool has a strict Pydantic input model** with `extra = "forbid"`; invalid input is rejected before execution.
-4. **Retrieved documents, web pages, and tool output are untrusted data.** They never authorize an action.
-5. **Side effects need approval bound to the exact arguments** (hash). Changed arguments need new approval.
-6. **No secrets in prompts, logs, traces, or source control.**
-7. **Failures are reported honestly**; never as success.
-8. One pull request per issue. Each PR adds tests, keeps `ruff check` and `pytest -q` green, and updates docs touched.
-9. Keep line length 88 (ruff). Keep modules small and typed.
-10. Do not add dependencies without need; justify each in the PR.
-
-## 3. Blocked decisions and how to proceed anyway
-
-Two decisions are open and gate the platform slices (see `docs/decisions/D1-D2-decision-brief.md`):
-
-- **D1 identity provider** and **D2 hosted model provider and data region.**
-
-Until they close, build against **interfaces and stubs**, not vendors:
-
-- Define `AuthContext(user_id, workspace_id, roles)` and an `Authenticator` protocol. Use a fake authenticator in tests.
-- Define a `ModelGateway` protocol (see §5, Slice 1) with a `FakeModelGateway` for tests. Do not hard-code any vendor.
-- Do not send any private document to any provider.
-
-Retention and deletion policy (D4) must close before any document upload or memory work. Embedding model choice (D5) must close before retrieval work.
+Behavior to preserve: bounded runs, answers built only from observed results, redaction before storage and return, tenant-scoped everything, and "the model proposes, policy decides".
 
 ---
 
-## 4. Slice 2 first: orchestrator integration and hardening
+## 2. Working rules (every change)
 
-This work needs neither D1 nor D2. Start here. Full acceptance criteria are in `docs/slice-2-issues.md`; summary and order:
+1. Identity comes only from the authenticated session or token; never from the client, the model, or a token claim for workspace authority.
+2. Every tool re-authorizes against the `TenantContext` inside the tool; tool inputs are strict Pydantic models.
+3. Retrieved documents, web pages, and tool output are untrusted data and never authorize an action.
+4. Side effects need approval bound to the exact arguments hash.
+5. No secrets in prompts, logs, traces, checkpoints, or source control; the redactor stays in the path.
+6. Failures are reported honestly; never as success.
+7. One pull request per work package. Each PR adds tests, keeps `ruff check` and `pytest -q` green, and updates the docs it touches.
+8. Line length 88; typed, small modules; justify every new dependency in the PR.
+9. Do not send private documents to any model provider.
 
-| Order | Issue | One-line goal |
-| --- | --- | --- |
-| 1 | #1 | Preemptive per-tool timeout (a hung tool is interrupted) |
-| 1 | #2 | Strict Pydantic tool schemas with `extra = forbid` |
-| 1 | #3 | `AuthContext` on `AgentState`; tools re-authorize; cross-workspace test |
-| 1 | #4 | `RunStatus` aligned with task states; `failed` actually produced |
-| 2 | #5 | Task cancellation via cancellation token |
-| 2 | #6 | Checkpointing and resume behind a `TaskStore` interface |
-| 2 | #10 | Trace redaction and persisted audit events |
-| 3 | #7 | Approval bound to an arguments hash; `waiting_for_approval`; resumable |
-| 3 | #8 | Token, cost, tool-call, and output-size budgets |
-| 3 | #9 | Plain-language partial-result summary |
-| 4 | #11 | `GET /api/v1/tasks/{task_id}` status endpoint |
-| 4 | #12 | `search_documents` over a small seeded Arabic and English corpus, workspace-filtered |
-| any | #13, #14 | Reconcile architecture docs; retry-loop cleanup |
+## 3. Still-open decisions and the stub rule
+
+D1 (identity provider) and D2 (hosted provider and data region) are open (see `docs/decisions/D1-D2-decision-brief.md`, Part 0). D4 (retention and deletion) must close before any document upload or memory work; D5 (embedding and reranking) before real retrieval.
+
+Until they close: build against the existing protocols and stubs, pick no vendor, and note in the PR where a closed decision would replace a stub. Vendor adapters are W8, and they start only when the decision owner confirms.
 
 ---
 
-## 5. Slice 1: walking skeleton with isolation
+## 4. Work packages, in order
 
-Goal: one authenticated, workspace-scoped chat turn. Needs D1 and D2 closed for the real adapters; build everything else against stubs first.
+Each package is one PR. "Done when" is the acceptance test.
 
-1. **FastAPI app** with `GET /api/v1/health`.
-2. **Database:** PostgreSQL, Alembic migrations, three tables only: `users`, `workspaces`, `workspace_members`. A workspace id on every row. Fields per Blueprint §13.
-3. **Authentication:** an `Authenticator` implementation for the chosen OIDC provider; `sub` maps to `users.identity_subject`; first login creates the user. Workspace membership, roles, and invitations live in our database; the server derives the workspace from the database on each request, never from a token claim.
-4. **Model gateway:** one adapter behind this interface:
+### W1: Sync documents to the code (do first; no code risk)
 
-   ```python
-   class ModelGateway(Protocol):
-       async def complete(self, messages, *, tools=None, response_schema=None,
-                          limits=None) -> ModelResponse: ...
-   ```
+**Why.** Documents contradict the code, and an agent will act on them.
+**Do**
+- Update blueprint §18.1 and §18.2 (Phase 3 is no longer "partly built": cancellation, checkpoints, status endpoint, strict schemas, `search_documents` exist) and §22 (gaps closed by issues 1 to 14; list what remains).
+- Reconcile the roadmap: the README numbers its phases differently from blueprint §18 (README: 4 memory, 5 first workflow, 7 proactivity; blueprint: 4 RAG, 5 memory, 7 integrations). Pick the blueprint numbering and fix the README.
+- Delete `BUILD_BRIEF.md` and `BUILD_BRIEF_SLICE_2.md`; add this file as `BUILD_BRIEF.md`.
+- Fix `pyproject.toml` description (still says "Step 1").
 
-   It records provider, model version, latency, usage, and estimated cost; validates structured output; retries transient errors only, with bounded backoff.
-5. **Chat endpoint** `POST /api/v1/chat` in Arabic or English, scoped to user and workspace.
-6. **Tests that fail the build:** cross-workspace access, forged workspace claim ignored, removed member blocked.
+**Done when:** no document claims something the code contradicts, and a grep for "12 tests" and "Not started" in status tables returns only true statements.
 
-Deferred from Slice 1: React RTL polish, pgvector, quotas.
+### W2: Complete the task API
 
-## 6. Slice 3: usable interface and bilingual baseline
+**Why.** Only status exists. Blueprint §12 requires the rest.
+**Do:** `GET /api/v1/health`; `POST /api/v1/tasks` (start a task under the caller's `TenantContext`); `POST /api/v1/tasks/{task_id}/cancel`; `POST /api/v1/tasks/{task_id}/approve` (calls `decide_approval`, hash-checked). Same 404-on-other-tenant rule on every task route. Identity from the provider token plus database membership, never from headers in platform mode.
+**Done when:** tests prove another tenant gets 404 on each route, cancel stops a running task, approve with changed arguments yields a new approval request, and a non-member of the workspace is rejected.
 
-1. React + TypeScript chat with RTL and LTR layout, mixed-direction text, code blocks, and an approval screen.
-2. Usage limits and cost tracking per user and task.
-3. First bilingual evaluation set of 10 to 20 tasks, grown toward 50 to 100 (Blueprint §16.2); runnable from CI or before release.
+### W3: PostgreSQL tenancy store and migrations
+
+**Why.** `InMemoryTenancyStore` is the only implementation; production needs the same semantics on a database.
+**Do:** `PostgresTenancyStore` implementing `TenancyStore` (connection factory, same style as `PostgresCheckpointStore`); Alembic migrations for `users`, `workspaces`, `workspace_members` (and invitations), with a workspace id on every row (Blueprint §13); evaluate Row-Level Security as a second barrier. Keep Postgres tests optional locally and run them in CI with a service container.
+**Done when:** the existing tenancy tests pass unchanged against both stores, and a test proves a removed member is blocked immediately while their account and other memberships remain.
+
+### W4: Chat endpoint through the gateway
+
+**Why.** Slice 1's target is one authenticated, workspace-scoped chat turn.
+**Do:** `POST /api/v1/chat` that authenticates, checks membership, calls `ModelGateway` (stub by default), and returns text in Arabic or English unchanged. Persist conversations and messages (Blueprint §13) behind a store interface. Record provider, model version, latency, tokens, and cost per call. Per-user and per-workspace usage limits (distinct from the trial `BudgetLedger`).
+**Done when:** a member gets a reply, a non-member gets 403/404, usage is recorded and limits stop further calls, and Arabic, English, and mixed prompts round-trip without corruption.
+
+### W5: Model-backed intent and planner behind the existing protocols
+
+**Why.** Intent and planning are rule-based starters.
+**Do:** `IntentUnderstanding` and `Planner` implementations that call the gateway and produce structured output; validate every proposed tool call against the registry and strict schemas before the orchestrator sees it; reject invalid or unknown tools without executing. Use `StubProvider` or a scripted fake in tests.
+**Done when:** invalid JSON, an unknown tool, an extra argument field, and an injection string inside retrieved text all end in a safe stop with a recorded reason, and the rule-based planner remains the default.
+
+### W6: Product evaluation suite
+
+**Why.** The only task set today is the D2 trial; Blueprint §16 requires a release gate.
+**Do:** an `evals/` suite of 10 to 20 bilingual tasks (grow toward 50 to 100): Arabic, English, mixed, document lookup with known answers, ambiguous requests, tool failures, injection in documents, cross-tenant attempts, approval-required actions, invalid tool arguments. Runnable with the stub in CI; runnable against a real provider on demand.
+**Done when:** CI runs the suite, a regression fails the build, and the report states pass/fail per task.
+
+### W7: Frontend baseline (Slice 3)
+
+**Do:** React + TypeScript chat with RTL and LTR layout, mixed-direction text, code blocks, task status, and an approval screen showing exact recipients/arguments. Minimal; no design polish beyond correctness.
+**Done when:** Arabic, English, and mixed messages render correctly, and approval shows the exact action that the hash is computed over.
+
+### W8: Real adapters (blocked until D1 and D2 close)
+
+**Do:** an OIDC `IdentityProvider` for the chosen provider (token validation: signature, issuer, audience, expiry; revocation); one real `ModelProvider`; run the D1 spike checks and the D2 30-task trial per the decision brief. The winners' spike branches are reviewed before merging.
+**Done when:** the decision brief's disqualifying checks (4, 8, 9, 10 for D1; the data gate for D2) pass, and the sign-off block is filled.
 
 ---
 
-## 7. Later phases (Blueprint §18), one at a time, each with its exit criteria
+## 5. Later phases (Blueprint §18), one at a time
 
-| Phase | Build | Key rule |
-| --- | --- | --- |
-| 4 RAG | Secure upload and validation, parsing (PyMuPDF, python-docx, python-pptx, openpyxl), OCR, structure-aware chunking, embeddings, hybrid retrieval with pgvector, citations, citation checking | Another user's files can never be retrieved; evaluate Arabic and English separately |
-| 5 Memory | Five memory types (working, conversation, profile, project, episodic), write flow, retrieval filtered by metadata first, review, correction, deletion | Memory is user-approved, scoped, inspectable, and deletable; no secrets stored |
-| 6 Artifacts | Summaries and reports, then presentations; validate every generated file by opening it | Output meets a written rubric |
-| 7 Integrations | One connector at a time: read-only, then drafts, then approval-based writes | No consequential action without argument-bound approval |
-| 8 Computer interaction | Isolated runtime, allowlists, pause, cancel, user takeover | Stop on payment, deletion, sharing, or permission screens; prefer official APIs |
-| 9 Hardening | Docker, workers, backups, monitoring, load and security tests, rollback, incident response | Tested restore; documented p95 and cost budget per core task |
+| Phase | Build | Needs | Key rule |
+| --- | --- | --- | --- |
+| 4 RAG | Secure upload and validation, parsing, OCR, structure-aware chunking, embeddings, hybrid retrieval (pgvector), citations and citation checking | D4, D5 | Another tenant's files can never be retrieved; evaluate Arabic and English separately |
+| 5 Memory | Five memory types, write flow, metadata-first retrieval, review, correction, deletion | D1, D4 | User-approved, scoped, inspectable, deletable; no secrets stored |
+| 6 Artifacts | Summaries, reports, then presentations; open and validate every file | | Output meets a written rubric |
+| 7 Integrations | One connector at a time: read-only, drafts, approval-based writes | | No consequential action without argument-bound approval |
+| 8 Computer interaction | Isolated runtime, allowlists, pause, cancel, takeover | | Stop on payment, deletion, sharing, or permission screens |
+| 9 Hardening | Containers, workers, backups, monitoring, load and security tests, rollback | | Tested restore; p95 and cost budget per core task |
 
-Do not start unrestricted computer control, multiple autonomous agents, voice, or autonomous scheduling in the first release.
+Out of scope for the first release: unrestricted computer control, multiple autonomous agents, voice, autonomous scheduling.
 
----
+## 6. Definition of done (every package)
 
-## 8. Definition of done (every feature)
+User story; request and response schemas; authorization rules; unit and integration tests; defined failure behavior; logging without secrets; documentation updated; for model-dependent behavior, evaluation cases; for anything external, a disable switch.
 
-A user story; request and response schemas; authorization rules; unit and integration tests; defined failure behavior; logging without secrets; evaluation cases where behavior is model-dependent; documentation; a demo with realistic input; a disable switch for any external integration.
+## 7. Raise questions, do not guess
 
-## 9. Questions to raise rather than guess
-
-- Anything touching identity, tenant scope, approval binding, or retention: ask before choosing.
-- Any requirement in this brief that conflicts with the Blueprint: stop and report; the Blueprint wins.
-- Any place where a decision from §3 is needed to proceed: use the stub, note it in the PR, and do not pick a vendor.
+Anything touching identity, tenant scope, approval binding, or retention; any conflict between this brief and the Blueprint; any place where an open decision is needed to proceed (use the stub, note it in the PR, pick no vendor).

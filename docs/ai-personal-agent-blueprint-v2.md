@@ -55,7 +55,7 @@ The differentiator is not the number of agents or the size of the model. It is r
 
 ### Current position (summary)
 
-A bounded orchestrator core is already built and passing CI: task state, step, time, and per-tool limits, bounded retries and replans, permission levels with approval, and a trace for every run. It does **not** yet include task cancellation, checkpointing, a task-status API, a real document-search tool, or strict Pydantic tool schemas. Phase 3 is therefore **partly built**: the next work is integration and hardening against this specification, not a rebuild. Details are in §18 and §22.
+A bounded orchestrator core is built and passing CI, and Slice 2 (issues 1 to 14) is complete: task state, step, time, and per-tool limits, bounded retries and replans, strict Pydantic tool schemas, tenant context with tool level re-authorization, task cancellation, checkpointing and resume, trace redaction and audit events, argument bound resumable approvals, token, cost, tool call, and output budgets, a partial result summary, a task status API, and a tenant scoped document search tool. Phase 3 is therefore **built**. A platform foundation also exists against stubs (tenancy tables, identity boundary, model gateway with budget shares, the D2 trial harness), so phases 1 and 2 are **partly built**; their real adapters wait on decisions D1 and D2. Details are in §18 and §22.
 
 ---
 
@@ -724,21 +724,23 @@ flowchart LR
     P0[0 Requirements] --> P1[1 Secure foundation] --> P2[2 Model gateway and chat] --> P3[3 Orchestration and first tool]
     P3 --> P4[4 RAG] --> P5[5 Memory] --> P6[6 Artifacts]
     P6 --> P7[7 Approved integrations] --> P8[8 Controlled computer use] --> P9[9 Production hardening]
-    style P3 fill:#fff3cd,stroke:#b58900
+    style P1 fill:#fff3cd,stroke:#b58900
+    style P2 fill:#fff3cd,stroke:#b58900
+    style P3 fill:#d4edda,stroke:#2e7d32
     style P7 fill:#f8d7da,stroke:#a94442
     style P8 fill:#f8d7da,stroke:#a94442
 ```
 
-*Yellow: partly built. Red: phases with external side effects.*
+*Yellow: partly built (phases 1 and 2, against stubs). Phase 3 is built. Red: phases with external side effects.*
 
 ### 18.1 Phase table
 
 | Phase | Status | Deliverables | Exit criteria |
 | --- | --- | --- | --- |
 | 0. Requirements | To confirm | Top use cases, roles, bilingual acceptance tests, provider data policy, budget, threat model | Clear scope, measurable acceptance criteria, threat model |
-| 1. Secure foundation | Not started (CI exists) | React shell, FastAPI, identity provider, workspaces, PostgreSQL, migrations, CI, audit foundation | Authenticated users, workspace checks enforced, no secrets in logs |
-| 2. Model gateway and chat | Not started | One hosted provider, streaming, language preferences, quotas, usage tracking, provider-error handling | Stable bilingual responses with useful error messages |
-| 3. Orchestration and first tool | **Partly built** (core shipped, CI green) | Tool schemas, state machine, bounded steps, task status, cancellation, tracing | Arguments validated; tasks complete, fail safely, or stop with a useful partial result |
+| 1. Secure foundation | **Partly built** (foundation against stubs: FastAPI app, tenancy store interface, identity boundary, audit foundation; chosen identity provider waits on D1) | React shell, FastAPI, identity provider, workspaces, PostgreSQL, migrations, CI, audit foundation | Authenticated users, workspace checks enforced, no secrets in logs |
+| 2. Model gateway and chat | **Partly built** (gateway interface, stub adapter, budget ledger, 30 task trial harness; hosted provider waits on D2; chat endpoint is W4 in BUILD_BRIEF.md) | One hosted provider, streaming, language preferences, quotas, usage tracking, provider-error handling | Stable bilingual responses with useful error messages |
+| 3. Orchestration and first tool | **Built** (Slice 2 complete, issues 1 to 14 closed, CI green) | Tool schemas, state machine, bounded steps, task status, cancellation, tracing | Arguments validated; tasks complete, fail safely, or stop with a useful partial result |
 | 4. RAG | Not started | Secure uploads, parsing, chunking, embeddings, retrieval, citations, language evaluation, cross-user tests | A known document question is answered with correct evidence; another user's files cannot be retrieved |
 | 5. Memory | Not started | User-controlled preferences, project scope, provenance, retention, review, correction, deletion | Memory is useful, scoped, and controllable; incorrect memory can be corrected |
 | 6. Artifact generation | Not started | Summaries and reports, then presentations, then advanced visuals; validation of every file | Output meets a repeatable rubric and generated files open |
@@ -756,14 +758,14 @@ flowchart LR
 | Permission levels with approval and denial paths | Done | `PermissionPolicy`, approval callback |
 | Per-run trace of every decision | Done | `AgentState.trace` |
 | Verification before returning a result | Done | `DefaultVerifier` |
-| Unit tests for the cycle and every limit (12 tests) | Done | `tests/test_orchestrator.py` |
-| Task cancellation | **Missing** | |
-| Checkpointing and resume | **Missing** | |
-| Task-status endpoint on the API | **Missing** | |
-| Real document-search tool | **Missing** | only `echo`, `get_current_time`, `calculator` exist |
-| Strict Pydantic tool schemas | **Missing** | `input_schema` is currently a simple dict |
+| Unit tests for the cycle and every limit | Done | 75 tests across `tests/` |
+| Task cancellation | Done (issue 5) | `orchestrator/cancellation.py` |
+| Checkpointing and resume | Done (issue 6) | `orchestrator/checkpoints.py` |
+| Task-status endpoint on the API | Done (issue 11) | `api.py` |
+| Real document-search tool | Done (issue 12) | `orchestrator/documents.py`: `search_documents` over a corpus interface |
+| Strict Pydantic tool schemas | Done (issue 2) | `StrictInput` in `orchestrator/tools.py` |
 
-**Conclusion.** The core exists. Slice 2 (§21.2) is integration and hardening against this specification, not a rebuild.
+**Conclusion.** Slice 2 (§21.2) is complete: the core is integrated and hardened against this specification. Remaining Phase 3 adjacent work lives in the build brief work packages (W2 completes the task API).
 
 ---
 
@@ -868,7 +870,7 @@ Deferred from slice 1: React RTL polish (a minimal chat page or API client is en
 
 **Slice 2: integration and hardening of the bounded task, plus one read-only tool.**
 
-The orchestrator core already exists, so this slice integrates it with the platform and closes the gaps listed in §18.2:
+The orchestrator core already exists, so this slice integrates it with the platform and closes the gaps listed in §18.2. **Status: complete.** All five items below shipped as issues 1 to 14:
 
 1. Wire the existing `AgentState` and limits to persisted task records and audit events.
 2. Add cancellation and checkpoint/resume.
@@ -888,23 +890,25 @@ Do not begin with unrestricted computer control, multiple autonomous agents, or 
 
 ## 22. Appendix: Implementation Gap Analysis
 
-Comparison of the shipped orchestrator against this specification. Items marked **gap** should become tracked issues in slice 2.
+Comparison of the shipped orchestrator against this specification. Every gap below became a tracked Slice 2 issue (1 to 14); **all are closed**. The final column records how each closed and what, if anything, remains.
 
 | Spec requirement | Implementation | Assessment |
 | --- | --- | --- |
 | Limits on steps, time, retries, replans | `OrchestratorLimits`, validated at construction | Met |
-| Token, cost, tool-call count, and output-size budgets (§7.1) | Not present | **Gap** |
-| Per-tool timeout | Duration is checked after the handler returns; a hung tool is not interrupted | **Gap**: needs preemptive timeout (worker thread or process, or async cancellation) |
-| Arguments validated before execution | Calculator parses safely, but `input_schema` is an informal dict and is not enforced | **Gap**: Pydantic models with `extra = forbid` |
-| Approval bound to exact arguments via hash (§14.3) | Approval callback receives step and tool; no hash, no persistence | **Gap** |
-| Approval as a resumable pending state (`waiting_for_approval`) | Run ends with `ask_user`; there is no resume | **Gap**: depends on checkpointing |
-| Cancellation, checkpoints | Not present | **Gap** |
-| Task statuses (§7.2) | `RunStatus` has completed, ask_user, failed, timeout, step_limit_exceeded, permission_denied; `failed` is never produced | **Gap**: align enum with `queued`, `running`, `waiting_for_approval`, `completed`, `failed`, `cancelled` |
-| Partial results on stop | Result carries `pending_step` and full state, but no summary of completed work | Partial: add a user-facing "done / not done" summary |
-| Trace of every decision | `AgentState.trace` | Met; needs redaction and persistence for audit |
-| Answer built only from observed results | `DefaultVerifier` joins observed results | Met (basic); no groundedness or citation check yet |
-| Intent and planning behind replaceable interfaces | `Protocol` classes; rule-based starters | Met; LLM-backed versions are future work |
-| Tenant and user scoping in state and tools | `AgentState` has no `user_id` or `workspace_id` | **Gap**: required before any data tool ships |
-| Tool-level re-authorization (§6.2 rule 4) | Not present | **Gap** |
-| Error-handling hygiene | Imports inside the retry loop; broad exception catch is intentional and documented | Minor cleanup |
-| Documentation consistency | `README.md` and `docs/architecture.md` use an eight-layer view | Reconcile with §4 |
+| Token, cost, tool-call count, and output-size budgets (§7.1) | `max_tool_calls`, `max_output_chars`, optional `max_tokens` and `max_cost` with usage accounting | Closed (issue 8) |
+| Per-tool timeout | Preemptive: handler runs in a daemon thread, orchestrator stops waiting at the timeout | Closed (issue 1). Remaining: Python cannot kill threads, so a runaway handler may finish in the background; side effecting handlers must be idempotent, and a process based executor is the upgrade path if hard kills are ever needed |
+| Arguments validated before execution | Strict Pydantic models with `extra = forbid`, validated before the handler runs | Closed (issue 2) |
+| Approval bound to exact arguments via hash (§14.3) | SHA-256 arguments hash on a persisted `ApprovalRecord` | Closed (issue 7) |
+| Approval as a resumable pending state (`waiting_for_approval`) | Run stops as `waiting_for_approval`; `decide_approval` resumes from the checkpoint only if the hash still matches | Closed (issues 6, 7) |
+| Cancellation, checkpoints | `CancellationToken`; checkpoint stores (memory, file, Postgres) with tenant checked resume | Closed (issues 5, 6) |
+| Task statuses (§7.2) | `queued`, `running`, `waiting_for_approval`, `completed`, `failed`, `cancelled`, with a separate `stop_reason`; `failed` is produced | Closed (issue 4) |
+| Partial results on stop | User facing summary built from observations on every result | Closed (issue 9) |
+| Trace of every decision | `AgentState.trace`, redacted before storage and return, with persisted audit events | Closed (issue 10) |
+| Answer built only from observed results | `DefaultVerifier` joins observed results | Met (basic); a groundedness and citation check remains future work with RAG (Phase 4) |
+| Intent and planning behind replaceable interfaces | `Protocol` classes; rule-based starters | Met; model backed versions are work package W5 in `BUILD_BRIEF.md` |
+| Tenant and user scoping in state and tools | `TenantContext` is required by `run()` and stored on `AgentState` | Closed (issue 3) |
+| Tool-level re-authorization (§6.2 rule 4) | Handlers receive the tenant context and re-authorize inside the tool; document search filters by workspace internally | Closed (issues 3, 12) |
+| Error-handling hygiene | Imports hoisted, `_execute_step` annotated | Closed (issue 14) |
+| Documentation consistency | One canonical 10 layer model in `README.md` and `docs/architecture.md`; statuses synced to the code by work package W1 | Closed (issue 13, W1) |
+
+**What remains after Slice 2:** the work packages in `BUILD_BRIEF.md` (W2 complete task API, W3 PostgreSQL tenancy, W4 chat endpoint, W5 model backed intent and planner, W6 evaluation suite, W7 frontend, W8 real adapters behind D1 and D2), and decisions D1 to D6.
