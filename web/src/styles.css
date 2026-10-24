@@ -1,0 +1,20 @@
+* { box-sizing: border-box; }
+body { font-family: system-ui, sans-serif; margin: 0; background: #f6f7f9; color: #17202a; }
+.layout { max-width: 860px; margin: 0 auto; padding: 24px 16px 48px; }
+header { display: flex; justify-content: space-between; align-items: end; gap: 16px; flex-wrap: wrap; }
+.session { display: flex; gap: 12px; }
+.session label { display: flex; flex-direction: column; font-size: 12px; gap: 4px; }
+.panel { background: #fff; border: 1px solid #dde3ea; border-radius: 10px; padding: 16px; margin-top: 16px; }
+.messages { display: flex; flex-direction: column; gap: 8px; min-height: 120px; }
+.message { padding: 8px 12px; border-radius: 8px; max-width: 85%; white-space: pre-wrap; }
+.message.user { background: #e8f0fe; align-self: flex-start; }
+.message.assistant { background: #eef7ee; align-self: flex-end; }
+.bidi { unicode-bidi: plaintext; }
+.code { background: #17202a; color: #e8f0fe; padding: 10px; border-radius: 8px; overflow-x: auto; direction: ltr; text-align: left; }
+.row { display: flex; gap: 8px; margin-top: 12px; }
+.row input { flex: 1; padding: 8px; border: 1px solid #c9d2dd; border-radius: 8px; }
+button { padding: 8px 14px; border: 0; border-radius: 8px; background: #1f6feb; color: #fff; cursor: pointer; }
+.notice { background: #fff7e6; border: 1px solid #f0d48a; padding: 8px 12px; border-radius: 8px; }
+.error { color: #b42318; }
+.approval { border: 2px solid #f0d48a; border-radius: 10px; padding: 12px; margin-top: 12px; background: #fffdf5; }
+.hash { font-size: 12px; word-break: break-all; color: #57606a; }

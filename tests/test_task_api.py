@@ -223,3 +223,17 @@ def test_platform_mode_non_member_rejected():
         },
     )
     assert ok.status_code == 201
+
+
+def test_status_exposes_pending_approval_arguments():
+    store = InMemoryCheckpointStore()
+    sent = []
+    client, _ = _client(_approval_orchestrator(store, sent), store)
+    created = client.post(
+        "/api/v1/tasks", json={"request": "send it"}, headers=HEADERS)
+    task_id = created.json()["task_id"]
+    status = client.get(f"/api/v1/tasks/{task_id}", headers=HEADERS)
+    pending = status.json()["pending_approval"]
+    assert pending["tool_name"] == "send_email"
+    assert pending["tool_args"] == {"to": "team@example.com"}
+    assert len(pending["arguments_hash"]) == 64
