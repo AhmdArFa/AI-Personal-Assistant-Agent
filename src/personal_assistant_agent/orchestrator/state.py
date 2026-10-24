@@ -8,12 +8,40 @@ from typing import Any
 
 
 class RunStatus(str, Enum):
+    """Task lifecycle statuses, aligned with Blueprint section 7.2."""
+
+    QUEUED = "queued"
+    RUNNING = "running"
+    WAITING_FOR_APPROVAL = "waiting_for_approval"
     COMPLETED = "completed"
-    ASK_USER = "ask_user"
     FAILED = "failed"
-    TIMEOUT = "timeout"
-    STEP_LIMIT_EXCEEDED = "step_limit_exceeded"
+    CANCELLED = "cancelled"
+
+
+class StopReason(str, Enum):
+    """Why a run stopped. Kept separate from the lifecycle status
+    so a failed task still says exactly which limit or rule fired."""
+
+    GOAL_ACHIEVED = "goal_achieved"
+    APPROVAL_REQUIRED = "approval_required"
     PERMISSION_DENIED = "permission_denied"
+    TIMEOUT = "timeout"
+    STEP_LIMIT = "step_limit_exceeded"
+    VALIDATION_ERROR = "validation_error"
+    UNKNOWN_TOOL = "unknown_tool"
+    RETRIES_EXHAUSTED = "retries_exhausted"
+    GOAL_NOT_ACHIEVED = "goal_not_achieved"
+    INTERNAL_ERROR = "internal_error"
+
+
+@dataclass(frozen=True)
+class TenantContext:
+    """Authenticated identity for a run, supplied by the server
+    side caller. It is never taken from the request text or from
+    tool arguments (Blueprint section 6.2)."""
+
+    user_id: str
+    workspace_id: str
 
 
 @dataclass
@@ -55,6 +83,8 @@ class Observation:
 @dataclass
 class AgentState:
     request: str
+    tenant: TenantContext | None = None
+    status: RunStatus = RunStatus.QUEUED
     intent: Intent | None = None
     plan: Plan | None = None
     observations: list[Observation] = field(default_factory=list)
@@ -76,3 +106,5 @@ class AgentResult:
     state: AgentState
     reason: str = ""
     pending_step: PlanStep | None = None
+    stop_reason: StopReason | None = None
+    error_summary: str = ""

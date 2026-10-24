@@ -36,7 +36,9 @@ No run is unbounded. Every run is controlled by `OrchestratorLimits`:
 | `max_execution_seconds` | 60 | Run stops with `timeout` |
 | `max_retries_per_step` | 2 | Step retries, then the run asks the user |
 | `max_replans` | 2 | Replanning stops, then the run asks the user |
-| `per_tool_timeout_seconds` | 15 | That tool call is treated as a failure |
+| `per_tool_timeout_seconds` | 15 | The orchestrator stops waiting, records a timeout, and follows the retry path |
+
+Per tool timeout mechanism: each handler runs in a daemon thread and the orchestrator waits at most the timeout for it. Python cannot kill a thread, so a handler that ignores its timeout may finish in the background and dies with the process; the run never blocks on it. Side effecting handlers must be idempotent, and a process based executor is the documented upgrade path if hard kills are ever needed.
 
 ### Tool permissions it enforces
 
@@ -49,11 +51,11 @@ The model proposes. The policy decides. Every tool is registered with a permissi
 | `EXTERNAL_EFFECT` | Sends, books, or changes something outside | Needs human approval |
 | `SENSITIVE` | Irreversible or high risk | Needs explicit approval every time |
 
-If a tool needs approval and no approval callback is configured, the run stops cleanly with `ask_user` and the pending step attached. It never proceeds silently.
+If a tool needs approval and no approval callback is configured, the run stops cleanly with `waiting_for_approval` and the pending step attached. It never proceeds silently.
 
 ### Run statuses
 
-`completed`, `ask_user`, `failed`, `timeout`, `step_limit_exceeded`, `permission_denied`. Every run also carries a full trace: request, intent, plan, each tool choice and execution, retries, approvals, and the verification verdict.
+Statuses follow the task state model: `queued`, `running`, `waiting_for_approval`, `completed`, `failed`, `cancelled`. Why a run stopped is reported separately in `stop_reason`: `goal_achieved`, `approval_required`, `permission_denied`, `timeout`, `step_limit_exceeded`, `validation_error`, `unknown_tool`, `retries_exhausted`, `goal_not_achieved`, `internal_error`. Failed runs carry a safe `error_summary` that never leaks internal exception details. Every run also carries a full trace: request, intent, plan, each tool choice and execution, retries, approvals, and the verification verdict.
 
 ## Quick start
 
@@ -65,11 +67,14 @@ python examples/demo.py
 
 ```python
 from personal_assistant_agent.orchestrator import (
-    AgentOrchestrator, default_registry,
+    AgentOrchestrator, TenantContext, default_registry,
 )
 
 agent = AgentOrchestrator(registry=default_registry())
-result = agent.run("calculate 19 * 3 + 1")
+result = agent.run(
+    "calculate 19 * 3 + 1",
+    context=TenantContext(user_id="u1", workspace_id="ws1"),
+)
 print(result.status, result.answer)  # completed 58
 ```
 

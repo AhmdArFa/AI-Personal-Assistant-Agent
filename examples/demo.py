@@ -20,9 +20,17 @@ from personal_assistant_agent.orchestrator import (
     Plan,
     PlanStep,
     StaticPlanner,
+    StrictInput,
+    TenantContext,
     Tool,
     default_registry,
 )
+
+CTX = TenantContext(user_id="demo-user", workspace_id="demo-workspace")
+
+
+class SendEmailInput(StrictInput):
+    to: str
 
 
 def show(title, result):
@@ -38,7 +46,7 @@ def show(title, result):
 def main():
     # 1. Full cycle, completes
     agent = AgentOrchestrator(registry=default_registry())
-    show("calculate", agent.run("calculate 19 * 3 + 1"))
+    show("calculate", agent.run("calculate 19 * 3 + 1", context=CTX))
 
     # 2 and 3. Permission gate on an external effect tool
     registry = default_registry()
@@ -47,7 +55,8 @@ def main():
             name="send_email",
             description="Send an email to a recipient.",
             permission=PermissionLevel.EXTERNAL_EFFECT,
-            handler=lambda args: f"email sent to {args.get('to', 'unknown')}",
+            handler=lambda args, context: f"email sent to {args.to}",
+            input_model=SendEmailInput,
         )
     )
     plan = Plan(
@@ -63,14 +72,16 @@ def main():
     )
 
     gated = AgentOrchestrator(registry=registry, planner=StaticPlanner(plan))
-    show("send email, no approval configured", gated.run("send the summary"))
+    show(
+        "send email, no approval configured", gated.run("send the summary", context=CTX)
+    )
 
     approved = AgentOrchestrator(
         registry=registry,
         planner=StaticPlanner(plan),
         approval_callback=lambda step, tool: True,
     )
-    show("send email, approval granted", approved.run("send the summary"))
+    show("send email, approval granted", approved.run("send the summary", context=CTX))
 
 
 if __name__ == "__main__":

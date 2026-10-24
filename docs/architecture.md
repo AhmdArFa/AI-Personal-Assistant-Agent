@@ -18,12 +18,12 @@ that every request passes through.
 
 1. Understand Intent: `intent.py` produces an `Intent`.
 2. Create Plan: `planner.py` produces ordered `PlanStep` items, each bound to a registered tool.
-3. Choose Tool: the registry resolves the step's tool. Unknown tools stop the run with `ask_user`.
+3. Choose Tool: the registry resolves the step's tool. Unknown tools stop the run as `failed` with stop reason `unknown_tool`.
 4. Permission check: `permissions.py` decides whether the tool runs automatically or needs the approval callback.
 5. Execute Tool: bounded by the per tool timeout, retried up to the retry limit. Failures are observed, never hidden.
 6. Observe Result: every attempt becomes an `Observation` on the state, with its duration.
 7. Is the Goal Achieved: `verifier.py` checks that every planned step has a successful observation.
    - Yes: return `completed` with an answer built only from observed results.
-   - No: replan while the replan budget remains, otherwise return `ask_user`.
+   - No: replan while the replan budget remains, otherwise return `failed` with the stop reason recorded.
 
 Time and step limits are checked before every step and during retries, so a run can stop with `timeout` or `step_limit_exceeded` at any point, always with the pending step attached.

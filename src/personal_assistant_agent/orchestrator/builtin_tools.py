@@ -11,8 +11,10 @@ import ast
 import operator
 from datetime import UTC, datetime
 
+from pydantic import Field
+
 from .permissions import PermissionLevel
-from .tools import Tool, ToolRegistry
+from .tools import EmptyInput, StrictInput, Tool, ToolRegistry
 
 _OPS = {
     ast.Add: operator.add,
@@ -21,6 +23,14 @@ _OPS = {
     ast.Div: operator.truediv,
     ast.USub: operator.neg,
 }
+
+
+class EchoInput(StrictInput):
+    message: str = ""
+
+
+class CalculatorInput(StrictInput):
+    expression: str = Field(min_length=1)
 
 
 def _eval_expr(node):
@@ -35,9 +45,8 @@ def _eval_expr(node):
     raise ValueError("unsupported expression")
 
 
-def _calculator(args):
-    expression = str(args["expression"])
-    return _eval_expr(ast.parse(expression, mode="eval"))
+def _calculator(args: CalculatorInput, context):
+    return _eval_expr(ast.parse(args.expression, mode="eval"))
 
 
 def default_registry() -> ToolRegistry:
@@ -47,8 +56,8 @@ def default_registry() -> ToolRegistry:
             name="echo",
             description="Return the given message unchanged.",
             permission=PermissionLevel.READ,
-            handler=lambda args: str(args.get("message", "")),
-            input_schema={"message": "string"},
+            handler=lambda args, context: str(args.message),
+            input_model=EchoInput,
         )
     )
     registry.register(
@@ -56,8 +65,8 @@ def default_registry() -> ToolRegistry:
             name="get_current_time",
             description="Return the current UTC date and time in ISO format.",
             permission=PermissionLevel.READ,
-            handler=lambda args: datetime.now(UTC).isoformat(),
-            input_schema={},
+            handler=lambda args, context: datetime.now(UTC).isoformat(),
+            input_model=EmptyInput,
         )
     )
     registry.register(
@@ -66,7 +75,7 @@ def default_registry() -> ToolRegistry:
             description="Safely evaluate a basic arithmetic expression.",
             permission=PermissionLevel.READ,
             handler=_calculator,
-            input_schema={"expression": "string"},
+            input_model=CalculatorInput,
         )
     )
     return registry
