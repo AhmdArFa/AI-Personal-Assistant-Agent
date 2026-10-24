@@ -51,9 +51,7 @@ def create_app(checkpoint_store: CheckpointStore) -> FastAPI:
         error_summary = ""
         if state.status.value == "failed":
             failures = [
-                obs.error
-                for obs in state.observations
-                if not obs.success and obs.error
+                obs.error for obs in state.observations if not obs.success and obs.error
             ]
             error_summary = failures[-1] if failures else ""
 

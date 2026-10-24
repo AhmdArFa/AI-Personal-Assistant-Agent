@@ -10,6 +10,15 @@ from .checkpoints import (
     JsonFileCheckpointStore,
     PostgresCheckpointStore,
 )
+from .documents import (
+    DocumentCorpus,
+    DocumentRecord,
+    SearchDocumentsInput,
+    SearchResultItem,
+    make_search_documents_tool,
+    registry_with_documents,
+    seeded_corpus,
+)
 from .limits import OrchestratorLimits
 from .orchestrator import AgentOrchestrator
 from .permissions import PermissionLevel, PermissionPolicy
@@ -36,6 +45,8 @@ __all__ = [
     "AuditSink",
     "CancellationToken",
     "CheckpointStore",
+    "DocumentCorpus",
+    "DocumentRecord",
     "EmptyInput",
     "InMemoryAuditSink",
     "InMemoryCheckpointStore",
@@ -51,6 +62,8 @@ __all__ = [
     "RuleBasedPlanner",
     "RunCancelled",
     "RunStatus",
+    "SearchDocumentsInput",
+    "SearchResultItem",
     "StaticPlanner",
     "StopReason",
     "StrictInput",
@@ -60,4 +73,7 @@ __all__ = [
     "UnknownToolError",
     "arguments_hash",
     "default_registry",
+    "make_search_documents_tool",
+    "registry_with_documents",
+    "seeded_corpus",
 ]

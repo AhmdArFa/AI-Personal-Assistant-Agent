@@ -18,14 +18,26 @@ OTHER = {"X-User-Id": "user-2", "X-Workspace-Id": "ws-1"}
 
 def _client_with_task():
     store = InMemoryCheckpointStore()
-    plan = Plan(goal="calc then echo", steps=[
-        PlanStep(id="s1", description="calc", tool_name="calculator",
-                 tool_args={"expression": "2 + 2"}),
-        PlanStep(id="s2", description="echo", tool_name="echo",
-                 tool_args={"message": "done"})])
+    plan = Plan(
+        goal="calc then echo",
+        steps=[
+            PlanStep(
+                id="s1",
+                description="calc",
+                tool_name="calculator",
+                tool_args={"expression": "2 + 2"},
+            ),
+            PlanStep(
+                id="s2",
+                description="echo",
+                tool_name="echo",
+                tool_args={"message": "done"},
+            ),
+        ],
+    )
     result = AgentOrchestrator(
-        registry=default_registry(), planner=StaticPlanner(plan),
-        checkpoint_store=store).run("calc then echo", context=CTX)
+        registry=default_registry(), planner=StaticPlanner(plan), checkpoint_store=store
+    ).run("calc then echo", context=CTX)
     return TestClient(create_app(store)), result.state.task_id
 
 
