@@ -127,6 +127,8 @@ def deserialize_state(data: dict[str, Any]) -> AgentState:
 class CheckpointStore(Protocol):
     def save(self, state: AgentState) -> None: ...
 
+    def save_snapshot(self, task_id: str, data: dict[str, Any]) -> None: ...
+
     def load(self, task_id: str) -> AgentState | None: ...
 
     def delete(self, task_id: str) -> None: ...
@@ -138,9 +140,12 @@ class InMemoryCheckpointStore:
         self._data: dict[str, dict[str, Any]] = {}
 
     def save(self, state: AgentState) -> None:
-        snapshot = json.loads(json.dumps(serialize_state(state)))
+        self.save_snapshot(state.task_id, serialize_state(state))
+
+    def save_snapshot(self, task_id: str, data: dict[str, Any]) -> None:
+        snapshot = json.loads(json.dumps(data))
         with self._lock:
-            self._data[state.task_id] = snapshot
+            self._data[task_id] = snapshot
 
     def load(self, task_id: str) -> AgentState | None:
         with self._lock:
@@ -162,12 +167,12 @@ class JsonFileCheckpointStore:
         return self._dir / f"{safe}.json"
 
     def save(self, state: AgentState) -> None:
-        path = self._path(state.task_id)
+        self.save_snapshot(state.task_id, serialize_state(state))
+
+    def save_snapshot(self, task_id: str, data: dict[str, Any]) -> None:
+        path = self._path(task_id)
         tmp = path.with_suffix(".tmp")
-        tmp.write_text(
-            json.dumps(serialize_state(state), ensure_ascii=False),
-            encoding="utf-8",
-        )
+        tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
         tmp.replace(path)
 
     def load(self, task_id: str) -> AgentState | None:
@@ -210,12 +215,12 @@ class PostgresCheckpointStore:
         return conn, cur
 
     def save(self, state: AgentState) -> None:
+        self.save_snapshot(state.task_id, serialize_state(state))
+
+    def save_snapshot(self, task_id: str, data: dict[str, Any]) -> None:
         conn, cur = self._cursor()
         try:
-            cur.execute(
-                self._UPSERT,
-                (state.task_id, json.dumps(serialize_state(state))),
-            )
+            cur.execute(self._UPSERT, (task_id, json.dumps(data)))
             conn.commit()
         finally:
             conn.close()

@@ -31,8 +31,9 @@ from collections.abc import Callable
 
 from pydantic import ValidationError
 
+from .audit import AuditEvent, AuditSink, Redactor
 from .cancellation import CancellationToken, RunCancelled
-from .checkpoints import CheckpointStore
+from .checkpoints import CheckpointStore, serialize_state
 from .intent import IntentUnderstanding, RuleBasedIntentUnderstanding
 from .limits import OrchestratorLimits
 from .permissions import PermissionPolicy
@@ -63,6 +64,8 @@ class AgentOrchestrator:
         verifier: Verifier | None = None,
         approval_callback: ApprovalCallback | None = None,
         checkpoint_store: CheckpointStore | None = None,
+        audit_sink: AuditSink | None = None,
+        redactor: Redactor | None = None,
     ) -> None:
         self.registry = registry
         self.limits = limits or OrchestratorLimits()
@@ -74,6 +77,8 @@ class AgentOrchestrator:
         self.verifier = verifier or DefaultVerifier()
         self.approval_callback = approval_callback
         self.checkpoint_store = checkpoint_store
+        self.audit_sink = audit_sink
+        self.redactor = redactor or Redactor()
 
     # ---------------------------------------------------------------
     def run(
@@ -214,11 +219,16 @@ class AgentOrchestrator:
                     pending_step=step,
                 )
             state.log(f"tool_chosen step={step.id} tool={tool.name}")
+            self.redactor.register_arguments(step.tool_args)
+            self._audit(state, "tool_chosen", tool_name=tool.name, step_id=step.id)
 
             # Limit: tool permissions
             if self.policy.requires_approval(tool.permission):
                 if self.approval_callback is None:
                     state.log(f"approval_required tool={tool.name}")
+                    self._audit(
+                        state, "approval_required", tool_name=tool.name, step_id=step.id
+                    )
                     return self._finish(
                         state,
                         RunStatus.WAITING_FOR_APPROVAL,
@@ -230,6 +240,9 @@ class AgentOrchestrator:
                     )
                 if not self.approval_callback(step, tool):
                     state.log(f"approval_denied tool={tool.name}")
+                    self._audit(
+                        state, "approval_denied", tool_name=tool.name, step_id=step.id
+                    )
                     return self._finish(
                         state,
                         RunStatus.FAILED,
@@ -238,6 +251,9 @@ class AgentOrchestrator:
                         pending_step=step,
                     )
                 state.log(f"approval_granted tool={tool.name}")
+                self._audit(
+                    state, "approval_granted", tool_name=tool.name, step_id=step.id
+                )
 
             # 4. Execute Tool, with bounded retries, and 5. Observe
             failure = self._execute_step(state, step, tool, started)
@@ -412,13 +428,51 @@ class AgentOrchestrator:
     # ---------------------------------------------------------------
     def _observe(self, state: AgentState, observation: Observation) -> None:
         state.observations.append(observation)
+        self._audit(
+            state,
+            "tool_executed" if observation.success else "tool_failed",
+            tool_name=observation.tool_name,
+            step_id=observation.step_id,
+            outcome="ok" if observation.success else "failed",
+            details={"attempt": observation.attempt, "error": observation.error},
+        )
         self._save_checkpoint(state)
+
+    def _audit(
+        self,
+        state: AgentState,
+        event_type: str,
+        tool_name: str = "",
+        step_id: str = "",
+        outcome: str = "",
+        details: dict | None = None,
+    ) -> None:
+        if self.audit_sink is None:
+            return
+        tenant = state.tenant
+        self.audit_sink.record(
+            AuditEvent(
+                task_id=state.task_id,
+                user_id=tenant.user_id if tenant else "",
+                workspace_id=tenant.workspace_id if tenant else "",
+                event_type=event_type,
+                tool_name=tool_name,
+                step_id=step_id,
+                outcome=outcome,
+                details=self.redactor.redact(details or {}),
+            )
+        )
 
     def _save_checkpoint(self, state: AgentState) -> None:
         if self.checkpoint_store is None:
             return
         try:
-            self.checkpoint_store.save(state)
+            snapshot = self.redactor.redact(serialize_state(state))
+            save_snapshot = getattr(self.checkpoint_store, "save_snapshot", None)
+            if save_snapshot is not None:
+                save_snapshot(state.task_id, snapshot)
+            else:
+                self.checkpoint_store.save(state)
         except Exception as exc:  # noqa: BLE001, checkpointing must not kill a run
             state.log(f"checkpoint_failed type={type(exc).__name__}")
 
@@ -492,6 +546,20 @@ class AgentOrchestrator:
         pending_step: PlanStep | None = None,
     ) -> AgentResult:
         state.status = status
+        if answer:
+            answer = self.redactor.redact_text(answer)
+        state.trace = [self.redactor.redact_text(line) for line in state.trace]
+        for obs in state.observations:
+            if obs.error:
+                obs.error = self.redactor.redact_text(obs.error)
+            if isinstance(obs.result, str):
+                obs.result = self.redactor.redact_text(obs.result)
+        self._audit(
+            state,
+            "run_stopped",
+            outcome=status.value,
+            details={"stop_reason": stop_reason.value if stop_reason else ""},
+        )
         self._save_checkpoint(state)
         return AgentResult(
             status=status,

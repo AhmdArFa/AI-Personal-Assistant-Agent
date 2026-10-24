@@ -1,5 +1,6 @@
 """Agent Orchestrator: the controller of the personal assistant agent."""
 
+from .audit import AuditEvent, AuditSink, InMemoryAuditSink, Redactor
 from .builtin_tools import default_registry
 from .cancellation import CancellationToken, RunCancelled
 from .checkpoints import (
@@ -28,9 +29,12 @@ __all__ = [
     "AgentOrchestrator",
     "AgentResult",
     "AgentState",
+    "AuditEvent",
+    "AuditSink",
     "CancellationToken",
     "CheckpointStore",
     "EmptyInput",
+    "InMemoryAuditSink",
     "InMemoryCheckpointStore",
     "Intent",
     "JsonFileCheckpointStore",
@@ -40,6 +44,7 @@ __all__ = [
     "Plan",
     "PlanStep",
     "PostgresCheckpointStore",
+    "Redactor",
     "RuleBasedPlanner",
     "RunCancelled",
     "RunStatus",
