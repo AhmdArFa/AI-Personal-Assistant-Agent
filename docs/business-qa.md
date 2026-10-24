@@ -49,17 +49,27 @@ from the first day of operation.
 ## Permissions model
 
 This is what makes companies trust or reject the product, so it is
-built from the start:
+built from the start, and this slice implements it in code:
 
 - **The owner** sees everything.
-- **An employee** sees only their scope (their branch, team, or
-  customers). A question outside their scope gets a clear refusal,
-  not a partial answer.
+- **An employee** sees only their branches. A question about
+  another branch, or a question spanning branches without naming
+  the employee's branch, gets a clear refusal, not a partial answer:
+  no query runs and no rows are shown. The scope is bound by the
+  server side caller when the tool is built; it never comes from
+  the question text or tool arguments, so wording cannot widen it.
+- **Tool level enforcement.** The raw `query_business_data` tool
+  enforces the same rule on its results: employee rows are filtered
+  to their branches, and a query whose rows carry no branch column
+  (a pure aggregate over all branches, where scope cannot be
+  verified) is refused outright.
 - **Read first.** All tools in this phase are read only. Any later
   write (creating an order, changing stock) is a high risk action
   that needs explicit approval before it runs.
-- **Audit trail.** Every question, answer, and query is recorded,
-  so any number can be traced back to its source later.
+- **Audit trail.** Every question, query, answer, and refusal is
+  recorded in an in memory `BusinessAuditLog` that can be rendered
+  and inspected, so any number can be traced back to its source
+  later.
 
 ## Pilot plan
 
@@ -98,6 +108,8 @@ pilot.
 python examples/business_qa_demo.py
 ```
 
-It answers four Egyptian Arabic questions over seeded demo data
-and prints each answer with its query and source rows. Tests live
-in `tests/test_business_qa.py`.
+It answers four Egyptian Arabic questions as the owner, then two
+more as a Cairo branch employee (a same branch question answered
+with evidence, another branch question refused), and prints the
+audit log at the end. Tests live in `tests/test_business_qa.py`
+and `tests/test_business_qa_permissions.py`.

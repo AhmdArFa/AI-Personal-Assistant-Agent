@@ -41,9 +41,13 @@ and one workflow on top of it.
 - Read only, always. Any later write capability (creating orders,
   changing stock) is a separate, high risk tool family that needs
   explicit approval per action. It is out of scope for this skill.
-- Answers are scoped: an owner sees everything, an employee sees
-  only their scope. The demo data is shared demo data; real tenant
-  scoping lands with the real data connector.
+- Answers are scoped, enforced in code: an owner sees everything,
+  an employee sees only their branches, and an out of scope
+  question is refused with no query and no rows. The raw data tool
+  enforces the same rule on its results. The scope is bound by the
+  server side caller, never by the question text or tool arguments.
+- Every question, query, answer, and refusal is recorded in a
+  `BusinessAuditLog` that can be rendered and inspected.
 
 ## Pilot scope
 

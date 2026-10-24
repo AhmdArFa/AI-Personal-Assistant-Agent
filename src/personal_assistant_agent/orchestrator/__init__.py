@@ -4,10 +4,14 @@ from .approvals import arguments_hash
 from .audit import AuditEvent, AuditSink, InMemoryAuditSink, Redactor
 from .builtin_tools import default_registry
 from .business_qa import (
+    OWNER_SCOPE,
     UNKNOWN_ANSWER,
     AnswerWithEvidence,
+    AuditEntry,
+    BusinessAuditLog,
     BusinessDataStore,
     BusinessQueryInput,
+    BusinessScope,
     answer_business_question,
     make_query_business_data_tool,
     registry_with_business_qa,
@@ -49,16 +53,20 @@ from .state import (
 from .tools import EmptyInput, StrictInput, Tool, ToolRegistry, UnknownToolError
 
 __all__ = [
+    "OWNER_SCOPE",
     "UNKNOWN_ANSWER",
     "AgentOrchestrator",
     "AgentResult",
     "AgentState",
     "AnswerWithEvidence",
     "ApprovalRecord",
+    "AuditEntry",
     "AuditEvent",
     "AuditSink",
+    "BusinessAuditLog",
     "BusinessDataStore",
     "BusinessQueryInput",
+    "BusinessScope",
     "CancellationToken",
     "CheckpointStore",
     "DocumentCorpus",
