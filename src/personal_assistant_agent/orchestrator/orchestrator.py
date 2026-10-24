@@ -24,6 +24,8 @@ from __future__ import annotations
 import time
 from collections.abc import Callable
 
+from pydantic import ValidationError
+
 from .intent import IntentUnderstanding, RuleBasedIntentUnderstanding
 from .limits import OrchestratorLimits
 from .permissions import PermissionPolicy
@@ -200,7 +202,7 @@ class AgentOrchestrator:
         # error is recorded and the tool is never executed.
         try:
             validated = tool.validate(step.tool_args)
-        except Exception as exc:  # pydantic ValidationError
+        except ValidationError as exc:
             detail = "; ".join(
                 f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}"
                 for e in getattr(exc, "errors", list)()
