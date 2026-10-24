@@ -692,3 +692,101 @@ def test_cancelling_finished_run_is_noop():
     token.cancel()
     assert result.status is RunStatus.COMPLETED
     assert result.answer == "4"
+
+
+def _budget_agent(registry, plan, **limits_kwargs):
+    return AgentOrchestrator(
+        registry=registry,
+        planner=StaticPlanner(plan),
+        limits=OrchestratorLimits(**limits_kwargs),
+    )
+
+
+def test_tool_call_budget_stops_run():
+    registry = default_registry()
+    plan = Plan(
+        goal="three",
+        steps=[
+            PlanStep(
+                id=f"s{i}",
+                description="echo",
+                tool_name="echo",
+                tool_args={"message": str(i)},
+            )
+            for i in range(3)
+        ],
+    )
+    result = _budget_agent(registry, plan, max_tool_calls=2).run("three", context=CTX)
+    assert result.status is RunStatus.FAILED
+    assert result.stop_reason is StopReason.BUDGET_EXCEEDED
+    assert result.state.tool_calls == 2
+    assert len([o for o in result.state.observations if o.success]) == 2
+
+
+def test_output_size_truncation():
+    registry = ToolRegistry()
+    registry.register(
+        Tool(
+            name="big",
+            description="big output",
+            permission=PermissionLevel.READ,
+            handler=lambda args, context: "x" * 5000,
+        )
+    )
+    plan = Plan(
+        goal="big", steps=[PlanStep(id="s1", description="big", tool_name="big")]
+    )
+    result = _budget_agent(registry, plan, max_output_chars=100).run("big", context=CTX)
+    assert result.status is RunStatus.COMPLETED
+    assert result.answer is not None
+    assert len(result.answer) < 200
+    assert "truncated" in result.answer
+
+
+def test_token_budget_from_usage_reports():
+    registry = ToolRegistry()
+    registry.register(
+        Tool(
+            name="meter",
+            description="reports usage",
+            permission=PermissionLevel.READ,
+            handler=lambda args, context: {"usage": {"tokens": 500}, "data": "ok"},
+        )
+    )
+    plan = Plan(
+        goal="meter", steps=[PlanStep(id="s1", description="meter", tool_name="meter")]
+    )
+    result = _budget_agent(registry, plan, max_tokens=100).run("meter", context=CTX)
+    assert result.status is RunStatus.FAILED
+    assert result.stop_reason is StopReason.BUDGET_EXCEEDED
+    assert result.state.tokens_used == 500
+
+
+def test_cost_budget_from_usage_reports():
+    registry = ToolRegistry()
+    registry.register(
+        Tool(
+            name="meter",
+            description="reports usage",
+            permission=PermissionLevel.READ,
+            handler=lambda args, context: {"usage": {"cost": 0.5}, "data": "ok"},
+        )
+    )
+    plan = Plan(
+        goal="meter", steps=[PlanStep(id="s1", description="meter", tool_name="meter")]
+    )
+    result = _budget_agent(registry, plan, max_cost=0.10).run("meter", context=CTX)
+    assert result.status is RunStatus.FAILED
+    assert "cost budget" in result.reason
+    assert result.state.cost_used == 0.5
+
+
+def test_budget_limits_validated():
+    with pytest.raises(ValueError):
+        OrchestratorLimits(max_tool_calls=0)
+    with pytest.raises(ValueError):
+        OrchestratorLimits(max_output_chars=0)
+    with pytest.raises(ValueError):
+        OrchestratorLimits(max_tokens=0)
+    with pytest.raises(ValueError):
+        OrchestratorLimits(max_cost=0)

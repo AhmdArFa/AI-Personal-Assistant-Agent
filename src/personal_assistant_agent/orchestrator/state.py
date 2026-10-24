@@ -33,6 +33,7 @@ class StopReason(str, Enum):
     RETRIES_EXHAUSTED = "retries_exhausted"
     GOAL_NOT_ACHIEVED = "goal_not_achieved"
     INTERNAL_ERROR = "internal_error"
+    BUDGET_EXCEEDED = "budget_exceeded"
     CANCELLED = "cancelled"
 
 
@@ -118,6 +119,9 @@ class AgentState:
     approved_arguments: dict[str, str] = field(default_factory=dict)
     steps_executed: int = 0
     replans_used: int = 0
+    tool_calls: int = 0
+    tokens_used: int = 0
+    cost_used: float = 0.0
     trace: list[str] = field(default_factory=list)
 
     def log(self, event: str) -> None:

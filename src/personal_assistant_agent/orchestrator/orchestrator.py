@@ -387,8 +387,18 @@ class AgentOrchestrator:
                     "execution time limit exceeded",
                     pending_step=step,
                 )
+            if state.tool_calls >= self.limits.max_tool_calls:
+                state.log("limit_hit max_tool_calls")
+                return self._finish(
+                    state,
+                    RunStatus.FAILED,
+                    StopReason.BUDGET_EXCEEDED,
+                    f"tool call budget exceeded ({self.limits.max_tool_calls})",
+                    pending_step=step,
+                )
             t0 = time.monotonic()
             try:
+                state.tool_calls += 1
                 result = self._call_tool_with_timeout(tool, validated, state)
                 duration = time.monotonic() - t0
                 if self._elapsed(started) > self.limits.max_execution_seconds:
@@ -400,6 +410,8 @@ class AgentOrchestrator:
                         "execution time limit exceeded",
                         pending_step=step,
                     )
+                result = self._account_usage(state, result)
+                result = self._truncate_output(state, tool, result)
                 state.steps_executed += 1
                 self._observe(
                     state,
@@ -413,6 +425,15 @@ class AgentOrchestrator:
                     ),
                 )
                 state.log(f"tool_executed step={step.id} attempt={attempt} ok")
+                budget = self._usage_budget_exceeded(state)
+                if budget is not None:
+                    return self._finish(
+                        state,
+                        RunStatus.FAILED,
+                        StopReason.BUDGET_EXCEEDED,
+                        budget,
+                        pending_step=step,
+                    )
                 return None
             except RunCancelled:
                 state.log(f"cancelled_during_tool step={step.id}")
@@ -708,6 +729,54 @@ class AgentOrchestrator:
                 StopReason.INTERNAL_ERROR,
                 "the task failed with an internal error",
             )
+
+    # ---------------------------------------------------------------
+    def _account_usage(self, state: AgentState, result):
+        """Tools and model adapters report usage inside a result
+        dict under a "usage" key: {"tokens": int, "cost": float}.
+        Counters persist in checkpoints."""
+        if isinstance(result, dict) and isinstance(result.get("usage"), dict):
+            usage = result["usage"]
+            try:
+                state.tokens_used += int(usage.get("tokens", 0))
+                state.cost_used += float(usage.get("cost", 0.0))
+            except (TypeError, ValueError):
+                state.log("usage_report_invalid")
+        return result
+
+    def _usage_budget_exceeded(self, state: AgentState) -> str | None:
+        if (
+            self.limits.max_tokens is not None
+            and state.tokens_used > self.limits.max_tokens
+        ):
+            return (
+                f"token budget exceeded ({state.tokens_used} > "
+                f"{self.limits.max_tokens})"
+            )
+        if self.limits.max_cost is not None and state.cost_used > self.limits.max_cost:
+            return (
+                f"cost budget exceeded ({state.cost_used:.4f} > {self.limits.max_cost})"
+            )
+        return None
+
+    def _truncate_output(self, state: AgentState, tool: Tool, result):
+        limit = self.limits.max_output_chars
+        marker = "...[truncated by the orchestrator: output size limit]"
+        if isinstance(result, str):
+            if len(result) > limit:
+                state.log(f"tool_output_truncated tool={tool.name}")
+                return result[:limit] + marker
+            return result
+        import json as _json
+
+        try:
+            serialized = _json.dumps(result, default=str)
+        except (TypeError, ValueError):
+            return result
+        if len(serialized) > limit:
+            state.log(f"tool_output_truncated tool={tool.name}")
+            return serialized[:limit] + marker
+        return result
 
     # ---------------------------------------------------------------
     def _finish(

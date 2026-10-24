@@ -108,6 +108,9 @@ def serialize_state(state: AgentState) -> dict[str, Any]:
             for a in state.approvals
         ],
         "approved_arguments": dict(state.approved_arguments),
+        "tool_calls": state.tool_calls,
+        "tokens_used": state.tokens_used,
+        "cost_used": state.cost_used,
         "steps_executed": state.steps_executed,
         "replans_used": state.replans_used,
         "trace": list(state.trace),
@@ -136,6 +139,9 @@ def deserialize_state(data: dict[str, Any]) -> AgentState:
         approvals=[ApprovalRecord(**a) for a in data.get("approvals", [])],
         approved_arguments=dict(data.get("approved_arguments", {})),
         steps_executed=data.get("steps_executed", 0),
+        tool_calls=data.get("tool_calls", 0),
+        tokens_used=data.get("tokens_used", 0),
+        cost_used=data.get("cost_used", 0.0),
         replans_used=data.get("replans_used", 0),
         trace=list(data.get("trace", [])),
     )
