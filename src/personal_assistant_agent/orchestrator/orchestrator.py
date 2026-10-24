@@ -31,6 +31,7 @@ from collections.abc import Callable
 
 from pydantic import ValidationError
 
+from .approvals import arguments_hash
 from .audit import AuditEvent, AuditSink, Redactor
 from .cancellation import CancellationToken, RunCancelled
 from .checkpoints import CheckpointStore, serialize_state
@@ -41,6 +42,7 @@ from .planner import Planner, RuleBasedPlanner
 from .state import (
     AgentResult,
     AgentState,
+    ApprovalRecord,
     Observation,
     PlanStep,
     RunStatus,
@@ -118,19 +120,34 @@ class AgentOrchestrator:
             )
 
     # ---------------------------------------------------------------
-    def _run(self, state: AgentState, started: float) -> AgentResult:
-        # 1. Understand Intent
+    def _run(
+        self,
+        state: AgentState,
+        started: float,
+        reuse_existing_plan: bool = False,
+    ) -> AgentResult:
+        # 1. Understand Intent (skipped when resuming a state that
+        # already understood it: the snapshot is authoritative)
         assert state.tenant is not None
-        state.intent = self.intent_understanding.understand(state.request)
-        state.log(f"intent_understood kind={state.intent.kind}")
+        if state.intent is None:
+            state.intent = self.intent_understanding.understand(state.request)
+            state.log(f"intent_understood kind={state.intent.kind}")
 
         # Plan, execute, verify loop. Replans are bounded.
+        first_pass = True
         while True:
-            # 2. Create Plan
-            state.plan = self.planner.create_plan(
-                state.intent, self.registry, state.observations
-            )
-            state.log(f"plan_created steps={len(state.plan.steps)}")
+            # 2. Create Plan. On a resume, the first pass reuses the
+            # checkpointed plan: its arguments are the ones that were
+            # checkpointed (and possibly approved). Replanning first
+            # would silently swap the reviewed arguments for new ones.
+            if first_pass and reuse_existing_plan and state.plan is not None:
+                state.log(f"plan_restored steps={len(state.plan.steps)}")
+            else:
+                state.plan = self.planner.create_plan(
+                    state.intent, self.registry, state.observations
+                )
+                state.log(f"plan_created steps={len(state.plan.steps)}")
+            first_pass = False
             self._save_checkpoint(state)
 
             blocked = self._execute_plan(state, started)
@@ -222,26 +239,63 @@ class AgentOrchestrator:
             self.redactor.register_arguments(step.tool_args)
             self._audit(state, "tool_chosen", tool_name=tool.name, step_id=step.id)
 
-            # Limit: tool permissions
+            # Limit: tool permissions, bound to exact arguments
             if self.policy.requires_approval(tool.permission):
-                if self.approval_callback is None:
+                current_hash = arguments_hash(tool.name, step.tool_args)
+                if state.approved_arguments.get(step.id) == current_hash:
+                    state.log(f"approval_previously_granted step={step.id}")
+                elif self.approval_callback is None:
+                    pending = next(
+                        (
+                            a
+                            for a in state.approvals
+                            if a.step_id == step.id
+                            and a.arguments_hash == current_hash
+                            and a.status == "pending"
+                        ),
+                        None,
+                    )
+                    if pending is None:
+                        state.approvals.append(
+                            ApprovalRecord(
+                                step_id=step.id,
+                                tool_name=tool.name,
+                                arguments_hash=current_hash,
+                                tool_args=dict(step.tool_args),
+                            )
+                        )
                     state.log(f"approval_required tool={tool.name}")
                     self._audit(
-                        state, "approval_required", tool_name=tool.name, step_id=step.id
+                        state,
+                        "approval_required",
+                        tool_name=tool.name,
+                        step_id=step.id,
                     )
                     return self._finish(
                         state,
                         RunStatus.WAITING_FOR_APPROVAL,
                         StopReason.APPROVAL_REQUIRED,
                         f"tool {tool.name} needs human approval "
-                        f"({tool.permission.name}) and no approval "
-                        "callback is configured",
+                        f"({tool.permission.name}): approve the task "
+                        "to resume it with these exact arguments",
                         pending_step=step,
                     )
-                if not self.approval_callback(step, tool):
+                elif not self.approval_callback(step, tool):
+                    state.approvals.append(
+                        ApprovalRecord(
+                            step_id=step.id,
+                            tool_name=tool.name,
+                            arguments_hash=current_hash,
+                            tool_args=dict(step.tool_args),
+                            status="denied",
+                        )
+                    )
                     state.log(f"approval_denied tool={tool.name}")
                     self._audit(
-                        state, "approval_denied", tool_name=tool.name, step_id=step.id
+                        state,
+                        "approval_denied",
+                        tool_name=tool.name,
+                        step_id=step.id,
                     )
                     return self._finish(
                         state,
@@ -250,10 +304,24 @@ class AgentOrchestrator:
                         f"approval denied for tool {tool.name}",
                         pending_step=step,
                     )
-                state.log(f"approval_granted tool={tool.name}")
-                self._audit(
-                    state, "approval_granted", tool_name=tool.name, step_id=step.id
-                )
+                else:
+                    state.approvals.append(
+                        ApprovalRecord(
+                            step_id=step.id,
+                            tool_name=tool.name,
+                            arguments_hash=current_hash,
+                            tool_args=dict(step.tool_args),
+                            status="approved",
+                        )
+                    )
+                    state.approved_arguments[step.id] = current_hash
+                    state.log(f"approval_granted tool={tool.name}")
+                    self._audit(
+                        state,
+                        "approval_granted",
+                        tool_name=tool.name,
+                        step_id=step.id,
+                    )
 
             # 4. Execute Tool, with bounded retries, and 5. Observe
             failure = self._execute_step(state, step, tool, started)
@@ -319,8 +387,18 @@ class AgentOrchestrator:
                     "execution time limit exceeded",
                     pending_step=step,
                 )
+            if state.tool_calls >= self.limits.max_tool_calls:
+                state.log("limit_hit max_tool_calls")
+                return self._finish(
+                    state,
+                    RunStatus.FAILED,
+                    StopReason.BUDGET_EXCEEDED,
+                    f"tool call budget exceeded ({self.limits.max_tool_calls})",
+                    pending_step=step,
+                )
             t0 = time.monotonic()
             try:
+                state.tool_calls += 1
                 result = self._call_tool_with_timeout(tool, validated, state)
                 duration = time.monotonic() - t0
                 if self._elapsed(started) > self.limits.max_execution_seconds:
@@ -332,6 +410,8 @@ class AgentOrchestrator:
                         "execution time limit exceeded",
                         pending_step=step,
                     )
+                result = self._account_usage(state, result)
+                result = self._truncate_output(state, tool, result)
                 state.steps_executed += 1
                 self._observe(
                     state,
@@ -345,6 +425,15 @@ class AgentOrchestrator:
                     ),
                 )
                 state.log(f"tool_executed step={step.id} attempt={attempt} ok")
+                budget = self._usage_budget_exceeded(state)
+                if budget is not None:
+                    return self._finish(
+                        state,
+                        RunStatus.FAILED,
+                        StopReason.BUDGET_EXCEEDED,
+                        budget,
+                        pending_step=step,
+                    )
                 return None
             except RunCancelled:
                 state.log(f"cancelled_during_tool step={step.id}")
@@ -477,6 +566,112 @@ class AgentOrchestrator:
             state.log(f"checkpoint_failed type={type(exc).__name__}")
 
     # ---------------------------------------------------------------
+    def decide_approval(
+        self,
+        task_id: str,
+        context: TenantContext | None = None,
+        approved: bool = True,
+        approval_id: str | None = None,
+    ) -> AgentResult:
+        """Decide a pending approval and resume the task.
+
+        The run resumes only if the arguments of the pending step
+        still hash to the value that was approved. Changed
+        arguments supersede the old record and produce a fresh
+        approval request instead of executing.
+        """
+        if self.checkpoint_store is None:
+            raise ValueError("decide_approval requires a checkpoint store")
+        if context is None:
+            raise ValueError("an authenticated TenantContext is required")
+        state = self.checkpoint_store.load(task_id)
+        if state is None:
+            raise ValueError(f"no checkpoint found for task {task_id}")
+        if state.tenant != context:
+            raise PermissionError("checkpoint belongs to a different user or workspace")
+        if state.status is not RunStatus.WAITING_FOR_APPROVAL:
+            raise ValueError("task is not waiting for approval")
+        record = next(
+            (
+                a
+                for a in state.approvals
+                if a.status == "pending"
+                and (approval_id is None or a.id == approval_id)
+            ),
+            None,
+        )
+        if record is None:
+            raise ValueError("no pending approval record on this task")
+        assert state.plan is not None
+        step = next((s for s in state.plan.steps if s.id == record.step_id), None)
+        if step is None:
+            raise ValueError("the approved step is no longer in the plan")
+        from .state import _now_iso
+
+        record.decided_by = context.user_id
+        record.decided_at = _now_iso()
+        if not approved:
+            record.status = "denied"
+            self._audit(
+                state,
+                "approval_denied",
+                tool_name=record.tool_name,
+                step_id=record.step_id,
+            )
+            return self._finish(
+                state,
+                RunStatus.FAILED,
+                StopReason.PERMISSION_DENIED,
+                f"approval denied for tool {record.tool_name}",
+                pending_step=step,
+            )
+        current_hash = arguments_hash(record.tool_name, step.tool_args)
+        if current_hash != record.arguments_hash:
+            record.status = "superseded"
+            state.approvals.append(
+                ApprovalRecord(
+                    step_id=step.id,
+                    tool_name=record.tool_name,
+                    arguments_hash=current_hash,
+                    tool_args=dict(step.tool_args),
+                )
+            )
+            self._audit(
+                state,
+                "approval_required",
+                tool_name=record.tool_name,
+                step_id=record.step_id,
+            )
+            return self._finish(
+                state,
+                RunStatus.WAITING_FOR_APPROVAL,
+                StopReason.APPROVAL_REQUIRED,
+                "arguments changed since approval was requested: "
+                "a new approval is required",
+                pending_step=step,
+            )
+        record.status = "approved"
+        state.approved_arguments[record.step_id] = record.arguments_hash
+        self._audit(
+            state,
+            "approval_granted",
+            tool_name=record.tool_name,
+            step_id=record.step_id,
+        )
+        state.status = RunStatus.RUNNING
+        state.log("resumed_after_approval")
+        try:
+            return self._run(state, time.monotonic(), reuse_existing_plan=True)
+        except Exception as exc:  # noqa: BLE001
+            state.log(f"internal_error type={type(exc).__name__}")
+            return self._finish(
+                state,
+                RunStatus.FAILED,
+                StopReason.INTERNAL_ERROR,
+                "the task failed with an internal error",
+            )
+
+    # ---------------------------------------------------------------
     def resume(
         self,
         task_id: str,
@@ -525,7 +720,7 @@ class AgentOrchestrator:
         state.log("resumed_from_checkpoint")
         started = time.monotonic()
         try:
-            return self._run(state, started)
+            return self._run(state, started, reuse_existing_plan=True)
         except Exception as exc:  # noqa: BLE001
             state.log(f"internal_error type={type(exc).__name__}")
             return self._finish(
@@ -534,6 +729,54 @@ class AgentOrchestrator:
                 StopReason.INTERNAL_ERROR,
                 "the task failed with an internal error",
             )
+
+    # ---------------------------------------------------------------
+    def _account_usage(self, state: AgentState, result):
+        """Tools and model adapters report usage inside a result
+        dict under a "usage" key: {"tokens": int, "cost": float}.
+        Counters persist in checkpoints."""
+        if isinstance(result, dict) and isinstance(result.get("usage"), dict):
+            usage = result["usage"]
+            try:
+                state.tokens_used += int(usage.get("tokens", 0))
+                state.cost_used += float(usage.get("cost", 0.0))
+            except (TypeError, ValueError):
+                state.log("usage_report_invalid")
+        return result
+
+    def _usage_budget_exceeded(self, state: AgentState) -> str | None:
+        if (
+            self.limits.max_tokens is not None
+            and state.tokens_used > self.limits.max_tokens
+        ):
+            return (
+                f"token budget exceeded ({state.tokens_used} > "
+                f"{self.limits.max_tokens})"
+            )
+        if self.limits.max_cost is not None and state.cost_used > self.limits.max_cost:
+            return (
+                f"cost budget exceeded ({state.cost_used:.4f} > {self.limits.max_cost})"
+            )
+        return None
+
+    def _truncate_output(self, state: AgentState, tool: Tool, result):
+        limit = self.limits.max_output_chars
+        marker = "...[truncated by the orchestrator: output size limit]"
+        if isinstance(result, str):
+            if len(result) > limit:
+                state.log(f"tool_output_truncated tool={tool.name}")
+                return result[:limit] + marker
+            return result
+        import json as _json
+
+        try:
+            serialized = _json.dumps(result, default=str)
+        except (TypeError, ValueError):
+            return result
+        if len(serialized) > limit:
+            state.log(f"tool_output_truncated tool={tool.name}")
+            return serialized[:limit] + marker
+        return result
 
     # ---------------------------------------------------------------
     def _finish(
@@ -546,6 +789,7 @@ class AgentOrchestrator:
         pending_step: PlanStep | None = None,
     ) -> AgentResult:
         state.status = status
+        summary = self._build_summary(state, status, reason, pending_step)
         if answer:
             answer = self.redactor.redact_text(answer)
         state.trace = [self.redactor.redact_text(line) for line in state.trace]
@@ -569,7 +813,42 @@ class AgentOrchestrator:
             pending_step=pending_step,
             stop_reason=stop_reason,
             error_summary=reason if status is RunStatus.FAILED else "",
+            summary=summary,
         )
+
+    @staticmethod
+    def _build_summary(
+        state: AgentState,
+        status: RunStatus,
+        reason: str,
+        pending_step: PlanStep | None,
+    ) -> str:
+        """Plain language summary built only from observations:
+        what completed, what did not, and why the run stopped.
+        It never uses model memory or unobserved claims."""
+        done: list[str] = []
+        for obs in state.observations:
+            label = f"{obs.step_id} ({obs.tool_name})"
+            if obs.success and label not in done:
+                done.append(label)
+        if status is RunStatus.COMPLETED:
+            return (
+                f"Completed: {len(done)} step(s) succeeded: "
+                + (", ".join(done) if done else "none")
+                + "."
+            )
+        parts = ["Done: " + (", ".join(done) if done else "nothing yet") + "."]
+        not_done: list[str] = []
+        if pending_step is not None:
+            not_done.append(f"{pending_step.id} ({pending_step.tool_name})")
+        for obs in state.observations:
+            label = f"{obs.step_id} ({obs.tool_name})"
+            if not obs.success and label not in done and label not in not_done:
+                not_done.append(label)
+        if not_done:
+            parts.append("Not done: " + ", ".join(not_done) + ".")
+        parts.append(f"Why it stopped: {reason}.")
+        return " ".join(parts)
 
     @staticmethod
     def _cancelled(state: AgentState) -> bool:

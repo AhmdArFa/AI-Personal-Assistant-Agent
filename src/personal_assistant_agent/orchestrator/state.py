@@ -33,6 +33,7 @@ class StopReason(str, Enum):
     RETRIES_EXHAUSTED = "retries_exhausted"
     GOAL_NOT_ACHIEVED = "goal_not_achieved"
     INTERNAL_ERROR = "internal_error"
+    BUDGET_EXCEEDED = "budget_exceeded"
     CANCELLED = "cancelled"
 
 
@@ -82,6 +83,28 @@ class Observation:
     duration_seconds: float = 0.0
 
 
+def _now_iso() -> str:
+    from datetime import UTC, datetime
+
+    return datetime.now(UTC).isoformat()
+
+
+@dataclass
+class ApprovalRecord:
+    """One approval decision, bound to the exact tool arguments
+    that were reviewed, by hash (Blueprint section 14.3)."""
+
+    step_id: str
+    tool_name: str
+    arguments_hash: str
+    tool_args: dict[str, Any] = field(default_factory=dict)
+    status: str = "pending"
+    id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    decided_by: str = ""
+    created_at: str = field(default_factory=_now_iso)
+    decided_at: str = ""
+
+
 @dataclass
 class AgentState:
     request: str
@@ -92,8 +115,13 @@ class AgentState:
     intent: Intent | None = None
     plan: Plan | None = None
     observations: list[Observation] = field(default_factory=list)
+    approvals: list[ApprovalRecord] = field(default_factory=list)
+    approved_arguments: dict[str, str] = field(default_factory=dict)
     steps_executed: int = 0
     replans_used: int = 0
+    tool_calls: int = 0
+    tokens_used: int = 0
+    cost_used: float = 0.0
     trace: list[str] = field(default_factory=list)
 
     def log(self, event: str) -> None:
@@ -112,3 +140,4 @@ class AgentResult:
     pending_step: PlanStep | None = None
     stop_reason: StopReason | None = None
     error_summary: str = ""
+    summary: str = ""

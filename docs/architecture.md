@@ -1,29 +1,55 @@
-# Architecture: where the Orchestrator sits
+# Architecture
 
-The full design has 8 layers. The orchestrator is layer 3, the core
-that every request passes through.
+One canonical layer model lives here and in the README. It is the
+model from the adopted blueprint (docs/blueprint-v2.md, section 4).
+Earlier drafts of this repository used a different 8-layer view;
+that view is retired and must not be used in new material.
 
-1. **Interfaces**: chat, voice, messaging apps, proactive notifications.
-2. **Gateway and Security**: authentication, sessions, OAuth for external accounts, no stored passwords.
-3. **Agent Core (this step)**: Router, Planner, Executor, Reflector, and one Agent State that is checkpointed so long tasks survive interruptions. This step ships that core as a plain, testable controller loop. The LangGraph state machine version builds on the same state, plan, and tool contracts.
-4. **Model Layer**: a main model for reasoning, a light model for routing, embeddings for memory, speech models for voice, all behind a provider strategy.
-5. **Tools Layer**: a central registry. Each tool has a description, a JSON input schema, a permission level, and timeout and retry rules. Tools connect by direct function calling or by MCP servers.
-6. **Skills Layer**: descriptive manifests on top of tools. A skill defines its goal, triggers, allowed tools, steps, approval points, and output shape. Adding a skill never edits the core.
-7. **Memory and Knowledge**: working memory for the current task, episodic memory for events and decisions, a permanent profile of the user, and procedural memory for how the user likes work done. Plus semantic search over the user's files.
-8. **Proactivity and Infrastructure**: a scheduler and event triggers with quiet hours and importance ranking, Postgres with pgvector, Redis for queues, and full observability and evals on every run.
+## Layers
 
-## The execution cycle, in code
+| Layer | Responsibility | Status in this repo |
+|---|---|---|
+| 1. Interface Layer | Web UI, API clients, future messaging channels | Not started |
+| 2. API Layer | Authentication context, validation, task endpoints, streaming | Started: task status endpoint (issue 11) |
+| 3. Orchestrator Layer | Explicit state machine, retries, replans, checkpoints, cancellation, budgets | Built (Step 1 + Slice 2) |
+| 4. Model Gateway Layer | Provider routing, structured output, failover, token and cost accounting | Not started (budget hooks exist) |
+| 5. Tools and Skills Layer | Typed tools, permission levels, skills | Started: registry, strict schemas, builtin tools |
+| 6. Knowledge Layer | Ingestion, chunking, embeddings, pgvector, citations | Started: search_documents over a corpus interface (issue 12) |
+| 7. Memory Layer | Working, episodic, semantic memory | Not started |
+| 8. Policy and Safety Layer | Tenant isolation, approvals, redaction, prompt injection defences | Built for the orchestrator core (issues 3, 7, 10) |
+| 9. Observability Layer | Traces, audit events, metrics, cost visibility | Started: trace + audit sink (issue 10) |
+| 10. Storage and Infrastructure Layer | PostgreSQL, object storage, queues, deployment | Started: checkpoint stores incl. Postgres adapter (issue 6) |
 
-`AgentOrchestrator.run(request)`:
+## The execution cycle
 
-1. Understand Intent: `intent.py` produces an `Intent`.
-2. Create Plan: `planner.py` produces ordered `PlanStep` items, each bound to a registered tool.
-3. Choose Tool: the registry resolves the step's tool. Unknown tools stop the run as `failed` with stop reason `unknown_tool`.
-4. Permission check: `permissions.py` decides whether the tool runs automatically or needs the approval callback.
-5. Execute Tool: bounded by the per tool timeout, retried up to the retry limit. Failures are observed, never hidden.
-6. Observe Result: every attempt becomes an `Observation` on the state, with its duration.
-7. Is the Goal Achieved: `verifier.py` checks that every planned step has a successful observation.
-   - Yes: return `completed` with an answer built only from observed results.
-   - No: replan while the replan budget remains, otherwise return `failed` with the stop reason recorded.
+```text
+Request
+  -> Understand Intent
+  -> Create Plan
+  -> Choose Tool
+  -> Permission and approval check (bound to exact arguments)
+  -> Execute Tool (per tool timeout, cancellation aware)
+  -> Observe Result (usage accounted, output truncated to budget)
+  -> Checkpoint
+  -> Is Goal Achieved?
+       No  -> continue, retry, replan, wait for approval, cancel
+       Yes -> Verify and Return (with a summary)
+```
 
-Time and step limits are checked before every step and during retries, so a run can stop with `timeout` or `step_limit_exceeded` at any point, always with the pending step attached.
+Run lifecycle (blueprint section 7.2): queued, running,
+waiting_for_approval, completed, failed, cancelled. Stop reasons
+are separate: goal_achieved, step_limit, timeout, retries_exhausted,
+approval_required, permission_denied, cancelled,
+verification_failed, internal_error, budget_exceeded.
+
+## Key invariants
+
+- Every run carries an authenticated TenantContext. Tools receive
+  it and re-authorize; identity never comes from model output.
+- Approval is bound to a SHA-256 hash of the exact tool arguments.
+  Changed arguments require a new approval.
+- Checkpoints are written after every observation, redacted, and
+  resume preserves counters so limits never reset.
+- Retrieved document text is untrusted data, labelled as such.
+- Nothing stored or returned exposes raw secrets: the redactor
+  runs before storage and before return.

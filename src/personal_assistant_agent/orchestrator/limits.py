@@ -19,6 +19,10 @@ class OrchestratorLimits:
     max_retries_per_step: int = 2
     max_replans: int = 2
     per_tool_timeout_seconds: float = 15.0
+    max_tool_calls: int = 50
+    max_output_chars: int = 20_000
+    max_tokens: int | None = None
+    max_cost: float | None = None
 
     def __post_init__(self) -> None:
         if self.max_steps < 1:
@@ -31,3 +35,11 @@ class OrchestratorLimits:
             raise ValueError("max_replans cannot be negative")
         if self.per_tool_timeout_seconds <= 0:
             raise ValueError("per_tool_timeout_seconds must be positive")
+        if self.max_tool_calls < 1:
+            raise ValueError("max_tool_calls must be at least 1")
+        if self.max_output_chars < 1:
+            raise ValueError("max_output_chars must be at least 1")
+        if self.max_tokens is not None and self.max_tokens < 1:
+            raise ValueError("max_tokens must be at least 1 when set")
+        if self.max_cost is not None and self.max_cost <= 0:
+            raise ValueError("max_cost must be positive when set")
