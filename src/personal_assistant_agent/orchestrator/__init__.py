@@ -1,5 +1,6 @@
 """Agent Orchestrator: the controller of the personal assistant agent."""
 
+from .approvals import arguments_hash
 from .audit import AuditEvent, AuditSink, InMemoryAuditSink, Redactor
 from .builtin_tools import default_registry
 from .cancellation import CancellationToken, RunCancelled
@@ -16,6 +17,7 @@ from .planner import RuleBasedPlanner, StaticPlanner
 from .state import (
     AgentResult,
     AgentState,
+    ApprovalRecord,
     Intent,
     Plan,
     PlanStep,
@@ -29,6 +31,7 @@ __all__ = [
     "AgentOrchestrator",
     "AgentResult",
     "AgentState",
+    "ApprovalRecord",
     "AuditEvent",
     "AuditSink",
     "CancellationToken",
@@ -55,5 +58,6 @@ __all__ = [
     "Tool",
     "ToolRegistry",
     "UnknownToolError",
+    "arguments_hash",
     "default_registry",
 ]

@@ -23,6 +23,7 @@ from typing import Any, Protocol
 
 from .state import (
     AgentState,
+    ApprovalRecord,
     Intent,
     Observation,
     Plan,
@@ -92,6 +93,21 @@ def serialize_state(state: AgentState) -> dict[str, Any]:
             }
             for o in state.observations
         ],
+        "approvals": [
+            {
+                "id": a.id,
+                "step_id": a.step_id,
+                "tool_name": a.tool_name,
+                "tool_args": _json_safe(a.tool_args),
+                "arguments_hash": a.arguments_hash,
+                "status": a.status,
+                "decided_by": a.decided_by,
+                "created_at": a.created_at,
+                "decided_at": a.decided_at,
+            }
+            for a in state.approvals
+        ],
+        "approved_arguments": dict(state.approved_arguments),
         "steps_executed": state.steps_executed,
         "replans_used": state.replans_used,
         "trace": list(state.trace),
@@ -117,6 +133,8 @@ def deserialize_state(data: dict[str, Any]) -> AgentState:
             else None
         ),
         observations=[Observation(**o) for o in data.get("observations", [])],
+        approvals=[ApprovalRecord(**a) for a in data.get("approvals", [])],
+        approved_arguments=dict(data.get("approved_arguments", {})),
         steps_executed=data.get("steps_executed", 0),
         replans_used=data.get("replans_used", 0),
         trace=list(data.get("trace", [])),
