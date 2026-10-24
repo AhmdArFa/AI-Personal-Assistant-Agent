@@ -13,7 +13,8 @@ authors = [{ name = "Ahmed Gamal Arfa" }]
 dependencies = ["pydantic>=2.6"]
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "ruff>=0.5", "fastapi>=0.110", "httpx>=0.27"]
+dev = ["pytest>=8", "ruff>=0.5", "fastapi>=0.110", "httpx>=0.27", "alembic>=1.13"]
+postgres = ["psycopg>=3.1"]
 api = ["fastapi>=0.110", "uvicorn>=0.29"]
 
 [tool.setuptools.packages.find]

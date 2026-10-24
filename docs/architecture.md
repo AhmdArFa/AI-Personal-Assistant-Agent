@@ -18,7 +18,7 @@ that view is retired and must not be used in new material.
 | 7. Memory Layer | Working, episodic, semantic memory | Not started |
 | 8. Policy and Safety Layer | Tenant isolation, approvals, redaction, prompt injection defences | Built for the orchestrator core (issues 3, 7, 10) |
 | 9. Observability Layer | Traces, audit events, metrics, cost visibility | Started: trace + audit sink (issue 10) |
-| 10. Storage and Infrastructure Layer | PostgreSQL, object storage, queues, deployment | Started: checkpoint stores incl. Postgres adapter (issue 6); tenancy tables as a store interface with an in memory reference implementation |
+| 10. Storage and Infrastructure Layer | PostgreSQL, object storage, queues, deployment | Started: checkpoint stores incl. Postgres adapter (issue 6); tenancy on PostgreSQL with Alembic migrations and opt-in row level security policies (W3) |
 
 ## The execution cycle
 

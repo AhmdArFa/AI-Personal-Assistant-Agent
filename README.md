@@ -106,11 +106,13 @@ src/personal_assistant_agent/
   api.py               FastAPI task API: health, create, status, cancel, approve
   platform/
     tenancy.py         Users, workspaces, memberships, invitations (our tables)
+    postgres_tenancy.py  The same tenancy semantics on PostgreSQL
     identity.py        Identity provider boundary and dev provider
     gateway.py         Model gateway with per provider budget shares
     stub.py            Stub model adapter (the brief's fallback path)
     trial.py           The D2 trial: 30 tasks, runner, blind review pack
-tests/                 83 tests covering the cycle, slice 2, and the platform
+migrations/            Alembic tenancy schema and opt-in RLS policies
+tests/                 85 tests covering the cycle, slice 2, and the platform
 examples/demo.py       End to end demo, including the permission gate
 docs/architecture.md   The canonical 10 layer model and invariants
 docs/ai-personal-agent-blueprint-v2.md   The adopted blueprint (version 2.0 revised)
