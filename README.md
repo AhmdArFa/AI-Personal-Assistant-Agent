@@ -2,7 +2,7 @@
 
 A general purpose AI personal assistant agent: it manages its owner's day and digital life, across calendar, mail, tasks, meetings, research, and files. It is designed technical first: architecture, tools, skills, and a structure to build on.
 
-This repository is built step by step. **Step 1 is the Agent Orchestrator, the controller.** Slice 2 hardened it into a resumable, tenant scoped, budget controlled core. The canonical design is the adopted blueprint in [docs/blueprint-v2.md](docs/blueprint-v2.md), and the canonical layer model lives in [docs/architecture.md](docs/architecture.md). One model everywhere: earlier drafts of this repo used a different 8 layer view, which is retired.
+This repository is built step by step. **Step 1 is the Agent Orchestrator, the controller.** Slice 2 hardened it into a resumable, tenant scoped, budget controlled core. The canonical design is the adopted blueprint in [docs/ai-personal-agent-blueprint-v2.md](docs/ai-personal-agent-blueprint-v2.md), and the canonical layer model lives in [docs/architecture.md](docs/architecture.md). One model everywhere: earlier drafts of this repo used a different 8 layer view, which is retired.
 
 ## Step 1: Agent Orchestrator, The Controller
 
@@ -113,7 +113,7 @@ src/personal_assistant_agent/
 tests/                 75 tests covering the cycle, slice 2, and the platform
 examples/demo.py       End to end demo, including the permission gate
 docs/architecture.md   The canonical 10 layer model and invariants
-docs/blueprint-v2.md   The adopted blueprint (version 2.0 revised)
+docs/ai-personal-agent-blueprint-v2.md   The adopted blueprint (version 2.0 revised)
 ```
 
 ## Design principles
