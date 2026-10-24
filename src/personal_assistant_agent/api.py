@@ -226,6 +226,9 @@ def create_app(
                 obs.error for obs in state.observations if not obs.success and obs.error
             ]
             error_summary = failures[-1] if failures else ""
+        pending = next(
+            (a for a in state.approvals if a.status == "pending"), None
+        )
         return {
             "task_id": state.task_id,
             "status": state.status.value,
@@ -233,6 +236,16 @@ def create_app(
             "completed_steps": completed_steps,
             "steps_executed": state.steps_executed,
             "error_summary": error_summary,
+            "pending_approval": (
+                {
+                    "approval_id": pending.id,
+                    "tool_name": pending.tool_name,
+                    "tool_args": pending.tool_args,
+                    "arguments_hash": pending.arguments_hash,
+                }
+                if pending is not None
+                else None
+            ),
         }
 
     @app.post("/api/v1/tasks/{task_id}/cancel")

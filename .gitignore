@@ -11,3 +11,6 @@ build/
 
 # Graphify output (generated, local only)
 graphify-out/
+
+node_modules/
+dist/
