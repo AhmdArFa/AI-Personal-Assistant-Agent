@@ -30,7 +30,14 @@ from .intent import IntentUnderstanding, RuleBasedIntentUnderstanding
 from .limits import OrchestratorLimits
 from .permissions import PermissionPolicy
 from .planner import Planner, RuleBasedPlanner
-from .state import AgentResult, AgentState, Observation, PlanStep, RunStatus
+from .state import (
+    AgentResult,
+    AgentState,
+    Observation,
+    PlanStep,
+    RunStatus,
+    TenantContext,
+)
 from .tools import Tool, ToolRegistry, UnknownToolError
 from .verifier import DefaultVerifier, Verifier
 
@@ -59,9 +66,14 @@ class AgentOrchestrator:
         self.approval_callback = approval_callback
 
     # ---------------------------------------------------------------
-    def run(self, request: str) -> AgentResult:
+    def run(self, request: str, context: TenantContext | None = None) -> AgentResult:
+        if context is None:
+            raise ValueError(
+                "an authenticated TenantContext is required: identity "
+                "is never taken from the request text"
+            )
         started = time.monotonic()
-        state = AgentState(request=request)
+        state = AgentState(request=request, tenant=context)
         state.log("request_received")
 
         # 1. Understand Intent
@@ -240,7 +252,7 @@ class AgentOrchestrator:
                 )
             t0 = time.monotonic()
             try:
-                result = tool.handler(validated)
+                result = tool.handler(validated, state.tenant)
                 duration = time.monotonic() - t0
                 if duration > self.limits.per_tool_timeout_seconds:
                     raise TimeoutError(

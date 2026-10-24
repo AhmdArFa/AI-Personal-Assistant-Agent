@@ -5,7 +5,15 @@ from .limits import OrchestratorLimits
 from .orchestrator import AgentOrchestrator
 from .permissions import PermissionLevel, PermissionPolicy
 from .planner import RuleBasedPlanner, StaticPlanner
-from .state import AgentResult, AgentState, Intent, Plan, PlanStep, RunStatus
+from .state import (
+    AgentResult,
+    AgentState,
+    Intent,
+    Plan,
+    PlanStep,
+    RunStatus,
+    TenantContext,
+)
 from .tools import EmptyInput, StrictInput, Tool, ToolRegistry, UnknownToolError
 
 __all__ = [
@@ -23,6 +31,7 @@ __all__ = [
     "RunStatus",
     "StaticPlanner",
     "StrictInput",
+    "TenantContext",
     "Tool",
     "ToolRegistry",
     "UnknownToolError",

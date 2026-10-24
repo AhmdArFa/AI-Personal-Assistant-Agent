@@ -16,6 +16,16 @@ class RunStatus(str, Enum):
     PERMISSION_DENIED = "permission_denied"
 
 
+@dataclass(frozen=True)
+class TenantContext:
+    """Authenticated identity for a run, supplied by the server
+    side caller. It is never taken from the request text or from
+    tool arguments (Blueprint section 6.2)."""
+
+    user_id: str
+    workspace_id: str
+
+
 @dataclass
 class Intent:
     """What the orchestrator understood from the user request."""
@@ -55,6 +65,7 @@ class Observation:
 @dataclass
 class AgentState:
     request: str
+    tenant: TenantContext | None = None
     intent: Intent | None = None
     plan: Plan | None = None
     observations: list[Observation] = field(default_factory=list)

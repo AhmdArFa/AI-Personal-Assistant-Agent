@@ -16,6 +16,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict
 
 from .permissions import PermissionLevel
+from .state import TenantContext
 
 
 class StrictInput(BaseModel):
@@ -29,7 +30,7 @@ class EmptyInput(StrictInput):
     """Input model for tools that take no arguments."""
 
 
-ToolHandler = Callable[[BaseModel], Any]
+ToolHandler = Callable[[BaseModel, TenantContext], Any]
 
 
 class UnknownToolError(KeyError):

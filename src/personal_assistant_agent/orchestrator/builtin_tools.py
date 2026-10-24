@@ -45,7 +45,7 @@ def _eval_expr(node):
     raise ValueError("unsupported expression")
 
 
-def _calculator(args: CalculatorInput):
+def _calculator(args: CalculatorInput, context):
     return _eval_expr(ast.parse(args.expression, mode="eval"))
 
 
@@ -56,7 +56,7 @@ def default_registry() -> ToolRegistry:
             name="echo",
             description="Return the given message unchanged.",
             permission=PermissionLevel.READ,
-            handler=lambda args: str(args.message),
+            handler=lambda args, context: str(args.message),
             input_model=EchoInput,
         )
     )
@@ -65,7 +65,7 @@ def default_registry() -> ToolRegistry:
             name="get_current_time",
             description="Return the current UTC date and time in ISO format.",
             permission=PermissionLevel.READ,
-            handler=lambda args: datetime.now(UTC).isoformat(),
+            handler=lambda args, context: datetime.now(UTC).isoformat(),
             input_model=EmptyInput,
         )
     )
