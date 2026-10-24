@@ -32,6 +32,7 @@ from collections.abc import Callable
 from pydantic import ValidationError
 
 from .cancellation import CancellationToken, RunCancelled
+from .checkpoints import CheckpointStore
 from .intent import IntentUnderstanding, RuleBasedIntentUnderstanding
 from .limits import OrchestratorLimits
 from .permissions import PermissionPolicy
@@ -61,6 +62,7 @@ class AgentOrchestrator:
         intent_understanding: IntentUnderstanding | None = None,
         verifier: Verifier | None = None,
         approval_callback: ApprovalCallback | None = None,
+        checkpoint_store: CheckpointStore | None = None,
     ) -> None:
         self.registry = registry
         self.limits = limits or OrchestratorLimits()
@@ -71,6 +73,7 @@ class AgentOrchestrator:
         )
         self.verifier = verifier or DefaultVerifier()
         self.approval_callback = approval_callback
+        self.checkpoint_store = checkpoint_store
 
     # ---------------------------------------------------------------
     def run(
@@ -123,6 +126,7 @@ class AgentOrchestrator:
                 state.intent, self.registry, state.observations
             )
             state.log(f"plan_created steps={len(state.plan.steps)}")
+            self._save_checkpoint(state)
 
             blocked = self._execute_plan(state, started)
             if blocked is not None:
@@ -259,7 +263,8 @@ class AgentOrchestrator:
                 for e in exc.errors()
             )
             error = f"ValidationError: {detail}"
-            state.observations.append(
+            self._observe(
+                state,
                 Observation(
                     step_id=step.id,
                     tool_name=tool.name,
@@ -267,7 +272,7 @@ class AgentOrchestrator:
                     error=error,
                     attempt=0,
                     duration_seconds=0.0,
-                )
+                ),
             )
             state.log(f"tool_validation_failed step={step.id} error={error}")
             return self._finish(
@@ -311,7 +316,9 @@ class AgentOrchestrator:
                         "execution time limit exceeded",
                         pending_step=step,
                     )
-                state.observations.append(
+                state.steps_executed += 1
+                self._observe(
+                    state,
                     Observation(
                         step_id=step.id,
                         tool_name=tool.name,
@@ -319,9 +326,8 @@ class AgentOrchestrator:
                         result=result,
                         attempt=attempt,
                         duration_seconds=duration,
-                    )
+                    ),
                 )
-                state.steps_executed += 1
                 state.log(f"tool_executed step={step.id} attempt={attempt} ok")
                 return None
             except RunCancelled:
@@ -336,7 +342,8 @@ class AgentOrchestrator:
             except Exception as exc:  # noqa: BLE001, tool errors are observed
                 duration = time.monotonic() - t0
                 last_error = f"{type(exc).__name__}: {exc}"
-                state.observations.append(
+                self._observe(
+                    state,
                     Observation(
                         step_id=step.id,
                         tool_name=tool.name,
@@ -344,7 +351,7 @@ class AgentOrchestrator:
                         error=last_error,
                         attempt=attempt,
                         duration_seconds=duration,
-                    )
+                    ),
                 )
                 state.log(
                     f"tool_failed step={step.id} attempt={attempt} error={last_error}"
@@ -403,8 +410,80 @@ class AgentOrchestrator:
         return outcome.get("result")
 
     # ---------------------------------------------------------------
-    @staticmethod
+    def _observe(self, state: AgentState, observation: Observation) -> None:
+        state.observations.append(observation)
+        self._save_checkpoint(state)
+
+    def _save_checkpoint(self, state: AgentState) -> None:
+        if self.checkpoint_store is None:
+            return
+        try:
+            self.checkpoint_store.save(state)
+        except Exception as exc:  # noqa: BLE001, checkpointing must not kill a run
+            state.log(f"checkpoint_failed type={type(exc).__name__}")
+
+    # ---------------------------------------------------------------
+    def resume(
+        self,
+        task_id: str,
+        context: TenantContext | None = None,
+        cancellation_token: CancellationToken | None = None,
+    ) -> AgentResult:
+        """Resume a run from its last checkpoint.
+
+        Steps that already succeeded are not executed again, and
+        the step and replan counters continue from the snapshot,
+        so limits are never reset by a crash.
+        """
+        if self.checkpoint_store is None:
+            raise ValueError("resume requires a checkpoint store")
+        if context is None:
+            raise ValueError("an authenticated TenantContext is required")
+        state = self.checkpoint_store.load(task_id)
+        if state is None:
+            raise ValueError(f"no checkpoint found for task {task_id}")
+        if state.tenant != context:
+            raise PermissionError("checkpoint belongs to a different user or workspace")
+        terminal = {
+            RunStatus.COMPLETED,
+            RunStatus.FAILED,
+            RunStatus.CANCELLED,
+            RunStatus.WAITING_FOR_APPROVAL,
+        }
+        if state.status in terminal:
+            return AgentResult(
+                status=state.status,
+                answer=(
+                    "\n".join(str(r) for r in state.successful_results())
+                    if state.status is RunStatus.COMPLETED
+                    else None
+                ),
+                state=state,
+                reason="resumed from a terminal checkpoint, nothing re-executed",
+                stop_reason=(
+                    StopReason.GOAL_ACHIEVED
+                    if state.status is RunStatus.COMPLETED
+                    else None
+                ),
+            )
+        state.cancellation_token = cancellation_token
+        state.status = RunStatus.RUNNING
+        state.log("resumed_from_checkpoint")
+        started = time.monotonic()
+        try:
+            return self._run(state, started)
+        except Exception as exc:  # noqa: BLE001
+            state.log(f"internal_error type={type(exc).__name__}")
+            return self._finish(
+                state,
+                RunStatus.FAILED,
+                StopReason.INTERNAL_ERROR,
+                "the task failed with an internal error",
+            )
+
+    # ---------------------------------------------------------------
     def _finish(
+        self,
         state: AgentState,
         status: RunStatus,
         stop_reason: StopReason,
@@ -413,6 +492,7 @@ class AgentOrchestrator:
         pending_step: PlanStep | None = None,
     ) -> AgentResult:
         state.status = status
+        self._save_checkpoint(state)
         return AgentResult(
             status=status,
             answer=answer,

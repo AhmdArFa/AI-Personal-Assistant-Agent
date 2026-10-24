@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any
@@ -86,7 +87,7 @@ class AgentState:
     request: str
     tenant: TenantContext | None = None
     status: RunStatus = RunStatus.QUEUED
-    task_id: str = ""
+    task_id: str = field(default_factory=lambda: uuid.uuid4().hex)
     cancellation_token: object | None = None
     intent: Intent | None = None
     plan: Plan | None = None

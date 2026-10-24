@@ -2,6 +2,12 @@
 
 from .builtin_tools import default_registry
 from .cancellation import CancellationToken, RunCancelled
+from .checkpoints import (
+    CheckpointStore,
+    InMemoryCheckpointStore,
+    JsonFileCheckpointStore,
+    PostgresCheckpointStore,
+)
 from .limits import OrchestratorLimits
 from .orchestrator import AgentOrchestrator
 from .permissions import PermissionLevel, PermissionPolicy
@@ -23,13 +29,17 @@ __all__ = [
     "AgentResult",
     "AgentState",
     "CancellationToken",
+    "CheckpointStore",
     "EmptyInput",
+    "InMemoryCheckpointStore",
     "Intent",
+    "JsonFileCheckpointStore",
     "OrchestratorLimits",
     "PermissionLevel",
     "PermissionPolicy",
     "Plan",
     "PlanStep",
+    "PostgresCheckpointStore",
     "RuleBasedPlanner",
     "RunCancelled",
     "RunStatus",
