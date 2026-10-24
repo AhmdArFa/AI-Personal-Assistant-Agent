@@ -36,7 +36,9 @@ No run is unbounded. Every run is controlled by `OrchestratorLimits`:
 | `max_execution_seconds` | 60 | Run stops with `timeout` |
 | `max_retries_per_step` | 2 | Step retries, then the run asks the user |
 | `max_replans` | 2 | Replanning stops, then the run asks the user |
-| `per_tool_timeout_seconds` | 15 | That tool call is treated as a failure |
+| `per_tool_timeout_seconds` | 15 | The orchestrator stops waiting, records a timeout, and follows the retry path |
+
+Per tool timeout mechanism: each handler runs in a daemon thread and the orchestrator waits at most the timeout for it. Python cannot kill a thread, so a handler that ignores its timeout may finish in the background and dies with the process; the run never blocks on it. Side effecting handlers must be idempotent, and a process based executor is the documented upgrade path if hard kills are ever needed.
 
 ### Tool permissions it enforces
 

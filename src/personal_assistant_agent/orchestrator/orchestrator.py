@@ -25,6 +25,7 @@ Why a run stopped lives in StopReason, separate from the status.
 
 from __future__ import annotations
 
+import threading
 import time
 from collections.abc import Callable
 
@@ -265,14 +266,8 @@ class AgentOrchestrator:
                 )
             t0 = time.monotonic()
             try:
-                result = tool.handler(validated, state.tenant)
+                result = self._call_tool_with_timeout(tool, validated, state)
                 duration = time.monotonic() - t0
-                if duration > self.limits.per_tool_timeout_seconds:
-                    raise TimeoutError(
-                        f"tool {tool.name} exceeded per tool timeout "
-                        f"({duration:.3f}s > "
-                        f"{self.limits.per_tool_timeout_seconds}s)"
-                    )
                 if self._elapsed(started) > self.limits.max_execution_seconds:
                     state.log("limit_hit execution_time after tool")
                     return self._finish(
@@ -320,6 +315,42 @@ class AgentOrchestrator:
             f"step {step.id} failed after {max_attempts} attempts: {last_error}",
             pending_step=step,
         )
+
+    # ---------------------------------------------------------------
+    def _call_tool_with_timeout(self, tool: Tool, validated, state: AgentState):
+        """Execute a tool handler preemptively bounded by the per
+        tool timeout.
+
+        Mechanism: the handler runs in a daemon thread and the
+        orchestrator waits at most per_tool_timeout_seconds for it.
+        Documented limit: Python cannot kill a thread, so a handler
+        that ignores the timeout keeps running in the background as
+        a daemon and dies with the process. The orchestrator itself
+        never blocks on it: it records a timeout observation and
+        moves on through the normal retry path. Handlers with side
+        effects must therefore be idempotent; a process based
+        executor is the upgrade path if hard kills are ever needed.
+        """
+        outcome: dict = {}
+
+        def target() -> None:
+            try:
+                outcome["result"] = tool.handler(validated, state.tenant)
+            except BaseException as exc:  # noqa: BLE001, ferried to caller
+                outcome["error"] = exc
+
+        thread = threading.Thread(target=target, daemon=True)
+        thread.start()
+        thread.join(self.limits.per_tool_timeout_seconds)
+        if thread.is_alive():
+            raise TimeoutError(
+                f"tool {tool.name} exceeded per tool timeout "
+                f"({self.limits.per_tool_timeout_seconds}s) and was "
+                "interrupted"
+            )
+        if "error" in outcome:
+            raise outcome["error"]
+        return outcome.get("result")
 
     # ---------------------------------------------------------------
     @staticmethod

@@ -500,3 +500,59 @@ def test_state_status_lifecycle():
     result = orchestrator().run("calculate 2 + 2", context=CTX)
     assert result.state.status is RunStatus.COMPLETED
     assert result.stop_reason is StopReason.GOAL_ACHIEVED
+
+
+def test_per_tool_timeout_interrupts_never_returning_tool():
+    import threading as _threading
+
+    registry = ToolRegistry()
+    registry.register(
+        Tool(
+            name="hangs",
+            description="never returns",
+            permission=PermissionLevel.READ,
+            handler=lambda args, context: _threading.Event().wait(),
+        )
+    )
+    plan = Plan(
+        goal="hangs", steps=[PlanStep(id="s1", description="hangs", tool_name="hangs")]
+    )
+    agent = AgentOrchestrator(
+        registry=registry,
+        planner=StaticPlanner(plan),
+        limits=OrchestratorLimits(
+            per_tool_timeout_seconds=0.2,
+            max_retries_per_step=1,
+            max_execution_seconds=30,
+        ),
+    )
+    t0 = time.monotonic()
+    result = agent.run("hangs", context=CTX)
+    elapsed = time.monotonic() - t0
+    assert elapsed < 3
+    assert result.status is RunStatus.FAILED
+    assert result.stop_reason is StopReason.RETRIES_EXHAUSTED
+    assert any(o.error and "TimeoutError" in o.error for o in result.state.observations)
+
+
+def test_tool_within_timeout_still_succeeds():
+    registry = ToolRegistry()
+    registry.register(
+        Tool(
+            name="slowish",
+            description="sleeps briefly",
+            permission=PermissionLevel.READ,
+            handler=lambda args, context: time.sleep(0.05) or "done",
+        )
+    )
+    plan = Plan(
+        goal="slowish",
+        steps=[PlanStep(id="s1", description="slowish", tool_name="slowish")],
+    )
+    result = AgentOrchestrator(
+        registry=registry,
+        planner=StaticPlanner(plan),
+        limits=OrchestratorLimits(per_tool_timeout_seconds=2),
+    ).run("slowish", context=CTX)
+    assert result.status is RunStatus.COMPLETED
+    assert result.answer == "done"
