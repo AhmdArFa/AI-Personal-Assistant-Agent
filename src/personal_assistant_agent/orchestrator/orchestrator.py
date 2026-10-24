@@ -31,6 +31,7 @@ from collections.abc import Callable
 
 from pydantic import ValidationError
 
+from .cancellation import CancellationToken, RunCancelled
 from .intent import IntentUnderstanding, RuleBasedIntentUnderstanding
 from .limits import OrchestratorLimits
 from .permissions import PermissionPolicy
@@ -72,16 +73,31 @@ class AgentOrchestrator:
         self.approval_callback = approval_callback
 
     # ---------------------------------------------------------------
-    def run(self, request: str, context: TenantContext | None = None) -> AgentResult:
+    def run(
+        self,
+        request: str,
+        context: TenantContext | None = None,
+        cancellation_token: CancellationToken | None = None,
+    ) -> AgentResult:
         if context is None:
             raise ValueError(
                 "an authenticated TenantContext is required: identity "
                 "is never taken from the request text"
             )
         started = time.monotonic()
-        state = AgentState(request=request, tenant=context)
+        state = AgentState(
+            request=request, tenant=context, cancellation_token=cancellation_token
+        )
         state.status = RunStatus.RUNNING
         state.log("request_received")
+        if cancellation_token is not None and cancellation_token.is_cancelled:
+            state.log("cancelled_before_start")
+            return self._finish(
+                state,
+                RunStatus.CANCELLED,
+                StopReason.CANCELLED,
+                "cancelled before the run started",
+            )
         try:
             return self._run(state, started)
         except Exception as exc:  # noqa: BLE001, internal errors become FAILED
@@ -145,6 +161,15 @@ class AgentOrchestrator:
         or None when the whole plan executed."""
         assert state.plan is not None
         for step in state.plan.steps:
+            if self._cancelled(state):
+                state.log(f"cancelled_before_step step={step.id}")
+                return self._finish(
+                    state,
+                    RunStatus.CANCELLED,
+                    StopReason.CANCELLED,
+                    "cancelled by the user",
+                    pending_step=step,
+                )
             # A step that already succeeded in an earlier plan does
             # not need to run again after a replan.
             if any(o.step_id == step.id and o.success for o in state.observations):
@@ -255,6 +280,15 @@ class AgentOrchestrator:
         max_attempts = 1 + self.limits.max_retries_per_step
         last_error = ""
         for attempt in range(1, max_attempts + 1):
+            if self._cancelled(state):
+                state.log(f"cancelled_before_retry step={step.id}")
+                return self._finish(
+                    state,
+                    RunStatus.CANCELLED,
+                    StopReason.CANCELLED,
+                    "cancelled by the user",
+                    pending_step=step,
+                )
             if self._elapsed(started) > self.limits.max_execution_seconds:
                 state.log("limit_hit execution_time during step")
                 return self._finish(
@@ -290,6 +324,15 @@ class AgentOrchestrator:
                 state.steps_executed += 1
                 state.log(f"tool_executed step={step.id} attempt={attempt} ok")
                 return None
+            except RunCancelled:
+                state.log(f"cancelled_during_tool step={step.id}")
+                return self._finish(
+                    state,
+                    RunStatus.CANCELLED,
+                    StopReason.CANCELLED,
+                    "cancelled by the user",
+                    pending_step=step,
+                )
             except Exception as exc:  # noqa: BLE001, tool errors are observed
                 duration = time.monotonic() - t0
                 last_error = f"{type(exc).__name__}: {exc}"
@@ -341,7 +384,14 @@ class AgentOrchestrator:
 
         thread = threading.Thread(target=target, daemon=True)
         thread.start()
-        thread.join(self.limits.per_tool_timeout_seconds)
+        deadline = time.monotonic() + self.limits.per_tool_timeout_seconds
+        while thread.is_alive():
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            if self._cancelled(state):
+                raise RunCancelled()
+            thread.join(min(0.02, remaining))
         if thread.is_alive():
             raise TimeoutError(
                 f"tool {tool.name} exceeded per tool timeout "
@@ -372,6 +422,11 @@ class AgentOrchestrator:
             stop_reason=stop_reason,
             error_summary=reason if status is RunStatus.FAILED else "",
         )
+
+    @staticmethod
+    def _cancelled(state: AgentState) -> bool:
+        token = state.cancellation_token
+        return token is not None and bool(token.is_cancelled)
 
     @staticmethod
     def _elapsed(started: float) -> float:

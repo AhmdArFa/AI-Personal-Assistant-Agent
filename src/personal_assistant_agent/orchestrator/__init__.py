@@ -1,6 +1,7 @@
 """Agent Orchestrator: the controller of the personal assistant agent."""
 
 from .builtin_tools import default_registry
+from .cancellation import CancellationToken, RunCancelled
 from .limits import OrchestratorLimits
 from .orchestrator import AgentOrchestrator
 from .permissions import PermissionLevel, PermissionPolicy
@@ -21,6 +22,7 @@ __all__ = [
     "AgentOrchestrator",
     "AgentResult",
     "AgentState",
+    "CancellationToken",
     "EmptyInput",
     "Intent",
     "OrchestratorLimits",
@@ -29,6 +31,7 @@ __all__ = [
     "Plan",
     "PlanStep",
     "RuleBasedPlanner",
+    "RunCancelled",
     "RunStatus",
     "StaticPlanner",
     "StopReason",

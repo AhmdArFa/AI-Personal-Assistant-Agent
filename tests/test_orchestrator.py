@@ -5,6 +5,7 @@ import pytest
 from personal_assistant_agent.orchestrator import (
     AgentOrchestrator,
     AgentState,
+    CancellationToken,
     OrchestratorLimits,
     PermissionLevel,
     PermissionPolicy,
@@ -556,3 +557,138 @@ def test_tool_within_timeout_still_succeeds():
     ).run("slowish", context=CTX)
     assert result.status is RunStatus.COMPLETED
     assert result.answer == "done"
+
+
+def test_cancel_before_start():
+    token = CancellationToken()
+    token.cancel()
+    result = orchestrator().run(
+        "calculate 1 + 1", context=CTX, cancellation_token=token
+    )
+    assert result.status is RunStatus.CANCELLED
+    assert result.stop_reason is StopReason.CANCELLED
+    assert result.state.observations == []
+
+
+def test_cancel_between_steps():
+    token = CancellationToken()
+
+    def first(args, context):
+        token.cancel()
+        return "one"
+
+    registry = ToolRegistry()
+    registry.register(
+        Tool(
+            name="first",
+            description="first",
+            permission=PermissionLevel.READ,
+            handler=first,
+        )
+    )
+    registry.register(
+        Tool(
+            name="echo",
+            description="echo",
+            permission=PermissionLevel.READ,
+            handler=lambda args, context: args.message,
+            input_model=default_registry().get("echo").input_model,
+        )
+    )
+    plan = Plan(
+        goal="two",
+        steps=[
+            PlanStep(id="s1", description="first", tool_name="first"),
+            PlanStep(
+                id="s2",
+                description="echo",
+                tool_name="echo",
+                tool_args={"message": "two"},
+            ),
+        ],
+    )
+    result = AgentOrchestrator(registry=registry, planner=StaticPlanner(plan)).run(
+        "two", context=CTX, cancellation_token=token
+    )
+    assert result.status is RunStatus.CANCELLED
+    assert result.pending_step is not None and result.pending_step.id == "s2"
+    assert [o.result for o in result.state.observations if o.success] == ["one"]
+
+
+def test_cancel_during_retry():
+    token = CancellationToken()
+    attempts = {"n": 0}
+
+    def flaky_cancel(args, context):
+        attempts["n"] += 1
+        token.cancel()
+        raise RuntimeError("fail once")
+
+    registry = ToolRegistry()
+    registry.register(
+        Tool(
+            name="flaky",
+            description="flaky",
+            permission=PermissionLevel.READ,
+            handler=flaky_cancel,
+        )
+    )
+    plan = Plan(
+        goal="flaky", steps=[PlanStep(id="s1", description="flaky", tool_name="flaky")]
+    )
+    result = AgentOrchestrator(
+        registry=registry,
+        planner=StaticPlanner(plan),
+        limits=OrchestratorLimits(max_retries_per_step=3),
+    ).run("flaky", context=CTX, cancellation_token=token)
+    assert result.status is RunStatus.CANCELLED
+    assert attempts["n"] == 1
+
+
+def test_cancel_during_long_tool_call():
+    import threading as _threading
+
+    token = CancellationToken()
+    registry = ToolRegistry()
+    registry.register(
+        Tool(
+            name="slow",
+            description="slow",
+            permission=PermissionLevel.READ,
+            handler=lambda args, context: time.sleep(5) or "done",
+        )
+    )
+    plan = Plan(
+        goal="slow", steps=[PlanStep(id="s1", description="slow", tool_name="slow")]
+    )
+    agent = AgentOrchestrator(
+        registry=registry,
+        planner=StaticPlanner(plan),
+        limits=OrchestratorLimits(per_tool_timeout_seconds=30),
+    )
+    holder = {}
+    worker = _threading.Thread(
+        target=lambda: holder.setdefault(
+            "result", agent.run("slow", context=CTX, cancellation_token=token)
+        )
+    )
+    t0 = time.monotonic()
+    worker.start()
+    time.sleep(0.3)
+    token.cancel()
+    worker.join(timeout=5)
+    elapsed = time.monotonic() - t0
+    assert not worker.is_alive()
+    assert elapsed < 4
+    assert holder["result"].status is RunStatus.CANCELLED
+
+
+def test_cancelling_finished_run_is_noop():
+    token = CancellationToken()
+    result = orchestrator().run(
+        "calculate 2 + 2", context=CTX, cancellation_token=token
+    )
+    assert result.status is RunStatus.COMPLETED
+    token.cancel()
+    assert result.status is RunStatus.COMPLETED
+    assert result.answer == "4"

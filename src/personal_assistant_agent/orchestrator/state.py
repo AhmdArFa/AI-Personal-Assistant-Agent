@@ -32,6 +32,7 @@ class StopReason(str, Enum):
     RETRIES_EXHAUSTED = "retries_exhausted"
     GOAL_NOT_ACHIEVED = "goal_not_achieved"
     INTERNAL_ERROR = "internal_error"
+    CANCELLED = "cancelled"
 
 
 @dataclass(frozen=True)
@@ -85,6 +86,8 @@ class AgentState:
     request: str
     tenant: TenantContext | None = None
     status: RunStatus = RunStatus.QUEUED
+    task_id: str = ""
+    cancellation_token: object | None = None
     intent: Intent | None = None
     plan: Plan | None = None
     observations: list[Observation] = field(default_factory=list)
