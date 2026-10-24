@@ -1,7 +1,7 @@
 # Architecture
 
 One canonical layer model lives here and in the README. It is the
-model from the adopted blueprint (docs/blueprint-v2.md, section 4).
+model from the adopted blueprint (docs/ai-personal-agent-blueprint-v2.md, section 4).
 Earlier drafts of this repository used a different 8-layer view;
 that view is retired and must not be used in new material.
 
