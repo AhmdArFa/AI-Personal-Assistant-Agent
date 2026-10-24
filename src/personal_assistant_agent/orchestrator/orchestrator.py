@@ -789,6 +789,7 @@ class AgentOrchestrator:
         pending_step: PlanStep | None = None,
     ) -> AgentResult:
         state.status = status
+        summary = self._build_summary(state, status, reason, pending_step)
         if answer:
             answer = self.redactor.redact_text(answer)
         state.trace = [self.redactor.redact_text(line) for line in state.trace]
@@ -812,7 +813,42 @@ class AgentOrchestrator:
             pending_step=pending_step,
             stop_reason=stop_reason,
             error_summary=reason if status is RunStatus.FAILED else "",
+            summary=summary,
         )
+
+    @staticmethod
+    def _build_summary(
+        state: AgentState,
+        status: RunStatus,
+        reason: str,
+        pending_step: PlanStep | None,
+    ) -> str:
+        """Plain language summary built only from observations:
+        what completed, what did not, and why the run stopped.
+        It never uses model memory or unobserved claims."""
+        done: list[str] = []
+        for obs in state.observations:
+            label = f"{obs.step_id} ({obs.tool_name})"
+            if obs.success and label not in done:
+                done.append(label)
+        if status is RunStatus.COMPLETED:
+            return (
+                f"Completed: {len(done)} step(s) succeeded: "
+                + (", ".join(done) if done else "none")
+                + "."
+            )
+        parts = ["Done: " + (", ".join(done) if done else "nothing yet") + "."]
+        not_done: list[str] = []
+        if pending_step is not None:
+            not_done.append(f"{pending_step.id} ({pending_step.tool_name})")
+        for obs in state.observations:
+            label = f"{obs.step_id} ({obs.tool_name})"
+            if not obs.success and label not in done and label not in not_done:
+                not_done.append(label)
+        if not_done:
+            parts.append("Not done: " + ", ".join(not_done) + ".")
+        parts.append(f"Why it stopped: {reason}.")
+        return " ".join(parts)
 
     @staticmethod
     def _cancelled(state: AgentState) -> bool:

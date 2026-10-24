@@ -790,3 +790,117 @@ def test_budget_limits_validated():
         OrchestratorLimits(max_tokens=0)
     with pytest.raises(ValueError):
         OrchestratorLimits(max_cost=0)
+
+
+def test_summary_on_timeout_lists_done_and_not_done():
+    registry = default_registry()
+    registry.register(
+        Tool(
+            name="slow",
+            description="slow",
+            permission=PermissionLevel.READ,
+            handler=lambda args, context: time.sleep(0.3) or "done",
+        )
+    )
+    plan = Plan(
+        goal="mix",
+        steps=[
+            PlanStep(
+                id="s1",
+                description="echo",
+                tool_name="echo",
+                tool_args={"message": "hi"},
+            ),
+            PlanStep(id="s2", description="slow", tool_name="slow"),
+        ],
+    )
+    result = AgentOrchestrator(
+        registry=registry,
+        planner=StaticPlanner(plan),
+        limits=OrchestratorLimits(max_execution_seconds=0.05),
+    ).run("mix", context=CTX)
+    assert result.status is RunStatus.FAILED
+    assert "Done: s1 (echo)." in result.summary
+    assert "Not done: s2 (slow)." in result.summary
+    assert "execution time" in result.summary
+
+
+def test_summary_on_step_limit():
+    plan = Plan(
+        goal="three",
+        steps=[
+            PlanStep(
+                id=f"s{i}",
+                description="echo",
+                tool_name="echo",
+                tool_args={"message": str(i)},
+            )
+            for i in range(3)
+        ],
+    )
+    result = orchestrator(
+        planner=StaticPlanner(plan), limits=OrchestratorLimits(max_steps=1)
+    ).run("three", context=CTX)
+    assert "Done: s0 (echo)." in result.summary
+    assert "Not done: s1 (echo)." in result.summary
+
+
+def test_summary_on_denied_approval():
+    registry = default_registry()
+    registry.register(
+        Tool(
+            name="send_email",
+            description="send",
+            permission=PermissionLevel.EXTERNAL_EFFECT,
+            handler=lambda args, context: "sent",
+        )
+    )
+    plan = Plan(
+        goal="mix",
+        steps=[
+            PlanStep(
+                id="s1",
+                description="echo",
+                tool_name="echo",
+                tool_args={"message": "draft ready"},
+            ),
+            PlanStep(id="s2", description="send", tool_name="send_email"),
+        ],
+    )
+    result = AgentOrchestrator(
+        registry=registry,
+        planner=StaticPlanner(plan),
+        approval_callback=lambda step, tool: False,
+    ).run("mix", context=CTX)
+    assert "Done: s1 (echo)." in result.summary
+    assert "Not done: s2 (send_email)." in result.summary
+    assert "approval denied" in result.summary
+
+
+def test_summary_on_retries_exhausted():
+    registry = ToolRegistry()
+    registry.register(
+        Tool(
+            name="broken",
+            description="broken",
+            permission=PermissionLevel.READ,
+            handler=lambda args, context: (_ for _ in ()).throw(RuntimeError("boom")),
+        )
+    )
+    plan = Plan(
+        goal="broken",
+        steps=[PlanStep(id="s1", description="broken", tool_name="broken")],
+    )
+    result = AgentOrchestrator(
+        registry=registry,
+        planner=StaticPlanner(plan),
+        limits=OrchestratorLimits(max_retries_per_step=0),
+    ).run("broken", context=CTX)
+    assert result.summary.startswith("Done: nothing yet.")
+    assert "Not done: s1 (broken)." in result.summary
+    assert "boom" in result.summary
+
+
+def test_summary_on_completed():
+    result = orchestrator().run("calculate 2 + 2", context=CTX)
+    assert result.summary.startswith("Completed:")

@@ -140,3 +140,4 @@ class AgentResult:
     pending_step: PlanStep | None = None
     stop_reason: StopReason | None = None
     error_summary: str = ""
+    summary: str = ""
