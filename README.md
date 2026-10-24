@@ -104,7 +104,13 @@ src/personal_assistant_agent/
     audit.py           Redactor and audit events
     documents.py       search_documents over a tenant scoped corpus
   api.py               FastAPI app: task status endpoint
-tests/                 63 tests covering the cycle, limits, and slice 2
+  platform/
+    tenancy.py         Users, workspaces, memberships, invitations (our tables)
+    identity.py        Identity provider boundary and dev provider
+    gateway.py         Model gateway with per provider budget shares
+    stub.py            Stub model adapter (the brief's fallback path)
+    trial.py           The D2 trial: 30 tasks, runner, blind review pack
+tests/                 75 tests covering the cycle, slice 2, and the platform
 examples/demo.py       End to end demo, including the permission gate
 docs/architecture.md   The canonical 10 layer model and invariants
 docs/blueprint-v2.md   The adopted blueprint (version 2.0 revised)
