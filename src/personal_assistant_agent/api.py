@@ -47,6 +47,11 @@ class CreateTaskBody(BaseModel):
     task_id: str | None = None
 
 
+class ChatBody(BaseModel):
+    message: str = Field(min_length=1, max_length=8000)
+    conversation_id: str | None = None
+
+
 class ApproveBody(BaseModel):
     approved: bool
     approval_id: str | None = None
@@ -57,6 +62,10 @@ def create_app(
     tenancy_store: TenancyStore | None = None,
     identity_provider: IdentityProvider | None = None,
     orchestrator: AgentOrchestrator | None = None,
+    gateway=None,
+    chat_provider: str = "stub",
+    conversation_store=None,
+    usage_limits=None,
 ) -> FastAPI:
     app = FastAPI(title="AI Personal Assistant Agent API", version="0.2.0")
     platform_mode = identity_provider is not None and tenancy_store is not None
@@ -113,6 +122,63 @@ def create_app(
             "answer": result.answer,
             "summary": result.summary,
             "error_summary": result.error_summary,
+        }
+
+    def _chat_service():
+        from .platform import (
+            ChatService,
+            InMemoryConversationStore,
+            ModelGateway,
+            StubProvider,
+            UsageLedger,
+        )
+
+        nonlocal gateway, conversation_store
+        if gateway is None:
+            gateway = ModelGateway({"stub": StubProvider()})
+        if conversation_store is None:
+            conversation_store = InMemoryConversationStore()
+        return ChatService(
+            gateway=gateway,
+            provider=chat_provider,
+            conversations=conversation_store,
+            usage=UsageLedger(),
+            limits=usage_limits,
+        )
+
+    _chat = None
+
+    def _chat_cached():
+        nonlocal _chat
+        if _chat is None:
+            _chat = _chat_service()
+        return _chat
+
+    @app.post("/api/v1/chat")
+    def chat(
+        body: ChatBody,
+        x_user_id: str = Header(default=""),
+        x_workspace_id: str = Header(default=""),
+        authorization: str = Header(default=""),
+    ) -> dict:
+        from .platform import UsageLimitExceeded
+
+        user_id, workspace_id = _caller(x_user_id, x_workspace_id, authorization)
+        try:
+            reply = _chat_cached().chat(
+                user_id, workspace_id, body.message, body.conversation_id
+            )
+        except PermissionError:
+            raise HTTPException(status_code=404, detail="task not found") from None
+        except UsageLimitExceeded as exc:
+            raise HTTPException(status_code=429, detail=str(exc)) from None
+        return {
+            "conversation_id": reply.conversation_id,
+            "reply": reply.text,
+            "provider": reply.provider,
+            "model_version": reply.model_version,
+            "tokens_used": reply.tokens_used,
+            "cost_usd": reply.cost_usd,
         }
 
     @app.get("/api/v1/health")

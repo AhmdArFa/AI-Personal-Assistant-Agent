@@ -5,6 +5,17 @@ who a user is, workspace authority lives in our own tables, and
 all model calls go through a gateway with budget shares.
 """
 
+from .chat import (
+    ChatReply,
+    ChatService,
+    Conversation,
+    ConversationStore,
+    InMemoryConversationStore,
+    Message,
+    UsageLedger,
+    UsageLimitExceeded,
+    UsageLimits,
+)
 from .gateway import (
     BudgetExceeded,
     BudgetLedger,
@@ -38,11 +49,17 @@ __all__ = [
     "AuthenticationError",
     "BudgetExceeded",
     "BudgetLedger",
+    "ChatReply",
+    "ChatService",
+    "Conversation",
+    "ConversationStore",
     "DevIdentityProvider",
     "Identity",
     "IdentityProvider",
+    "InMemoryConversationStore",
     "InMemoryTenancyStore",
     "Invitation",
+    "Message",
     "ModelGateway",
     "ModelProvider",
     "ModelRequest",
@@ -55,6 +72,9 @@ __all__ = [
     "TrialReport",
     "TrialRunner",
     "TrialTask",
+    "UsageLedger",
+    "UsageLimitExceeded",
+    "UsageLimits",
     "User",
     "Workspace",
     "get_or_create_user",
