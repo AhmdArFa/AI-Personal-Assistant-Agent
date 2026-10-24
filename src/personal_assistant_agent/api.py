@@ -16,19 +16,51 @@ from __future__ import annotations
 from fastapi import FastAPI, Header, HTTPException
 
 from .orchestrator.checkpoints import CheckpointStore
+from .platform.identity import (
+    AuthenticationError,
+    IdentityProvider,
+    get_or_create_user,
+)
+from .platform.tenancy import TenancyStore
 
 
-def create_app(checkpoint_store: CheckpointStore) -> FastAPI:
+def create_app(
+    checkpoint_store: CheckpointStore,
+    tenancy_store: TenancyStore | None = None,
+    identity_provider: IdentityProvider | None = None,
+) -> FastAPI:
     app = FastAPI(title="AI Personal Assistant Agent API", version="0.1.0")
 
     @app.get("/api/v1/tasks/{task_id}")
     def task_status(
         task_id: str,
-        x_user_id: str = Header(...),
-        x_workspace_id: str = Header(...),
+        x_user_id: str = Header(default=""),
+        x_workspace_id: str = Header(default=""),
+        authorization: str = Header(default=""),
     ) -> dict:
         state = checkpoint_store.load(task_id)
-        if (
+        if identity_provider is not None and tenancy_store is not None:
+            # Platform mode (brief D1): the provider proves who the
+            # user is; the workspace is selected by header but its
+            # authority comes from the membership tables only.
+            if not authorization.startswith("Bearer "):
+                raise HTTPException(status_code=401, detail="missing token")
+            try:
+                identity = identity_provider.authenticate(
+                    authorization.removeprefix("Bearer ")
+                )
+            except AuthenticationError:
+                raise HTTPException(status_code=401, detail="invalid token") from None
+            user = get_or_create_user(tenancy_store, identity)
+            if (
+                state is None
+                or state.tenant is None
+                or state.tenant.user_id != user.user_id
+                or state.tenant.workspace_id != x_workspace_id
+                or not tenancy_store.is_member(x_workspace_id, user.user_id)
+            ):
+                raise HTTPException(status_code=404, detail="task not found")
+        elif (
             state is None
             or state.tenant is None
             or state.tenant.user_id != x_user_id
