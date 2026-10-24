@@ -21,6 +21,7 @@ from .identity import (
     IdentityProvider,
     get_or_create_user,
 )
+from .postgres_tenancy import PostgresTenancyStore
 from .stub import StubProvider
 from .tenancy import (
     InMemoryTenancyStore,
@@ -46,6 +47,7 @@ __all__ = [
     "ModelProvider",
     "ModelRequest",
     "ModelResponse",
+    "PostgresTenancyStore",
     "StubProvider",
     "TaskResult",
     "TenancyStore",
