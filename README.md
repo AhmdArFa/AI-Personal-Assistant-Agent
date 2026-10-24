@@ -124,20 +124,20 @@ docs/ai-personal-agent-blueprint-v2.md   The adopted blueprint (version 2.0 revi
 4. Every fact in an answer comes from a tool result or from memory, with a trace the user can review.
 5. Memory is the product. What makes the assistant personal is what it remembers about its owner.
 
-## Roadmap (blueprint section 18)
+## Roadmap (blueprint section 18 numbering)
 
-- [x] Phase 0: sources of truth, one canonical blueprint and layer model
-- [x] Phase 1 (partial): backend foundation pieces in the orchestrator: tenant context, strict tool contracts
-- [x] Phase 2: Slice 1 equivalent for the core: one safe read tool end to end (`search_documents`)
-- [x] Phase 3 (partial): reliability and safety inside the orchestrator: timeouts, cancellation, checkpoints and resume, argument bound approvals, budgets, redaction, audit events, task status endpoint (Slice 2, issues 1 to 14, complete)
-- [ ] Phase 4: memory and personalisation
-- [ ] Phase 5: first complete user workflow with approvals
-- [ ] Phase 6: artifacts
-- [ ] Phase 7: proactivity
-- [ ] Phase 8: messaging channels
-- [ ] Phase 9: hardening and scale
+- [x] Phase 0: Requirements: canonical blueprint and decision briefs (decisions D1 to D6 are tracked in the blueprint, still open)
+- [ ] Phase 1: Secure foundation: partly built against stubs (FastAPI app, tenancy store, identity boundary, audit foundation); the chosen identity provider waits on D1
+- [ ] Phase 2: Model gateway and chat: partly built (gateway interface, stub adapter, budget ledger, trial harness); the hosted provider waits on D2, the chat endpoint is work package W4
+- [x] Phase 3: Orchestration and first tool: built (Slice 2, issues 1 to 14, complete: strict schemas, tenant context, cancellation, checkpoints, approvals, budgets, redaction, task status, `search_documents`)
+- [ ] Phase 4: RAG (needs D4 and D5)
+- [ ] Phase 5: Memory (needs D1 and D4)
+- [ ] Phase 6: Artifact generation
+- [ ] Phase 7: Approved integrations
+- [ ] Phase 8: Controlled computer interaction
+- [ ] Phase 9: Production hardening
 
-Still open before wider building: decisions D1 to D6 in the blueprint need owners and dates. D1 (identity provider) and D2 (hosted provider and data region) gate the platform slices.
+The remaining work packages, in order, are in `BUILD_BRIEF.md` (W2 to W8).
 
 ## License
 
