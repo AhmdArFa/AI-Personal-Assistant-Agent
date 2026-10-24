@@ -103,7 +103,7 @@ src/personal_assistant_agent/
     checkpoints.py     Checkpoint stores (memory, file, Postgres) and resume data
     audit.py           Redactor and audit events
     documents.py       search_documents over a tenant scoped corpus
-  api.py               FastAPI task API: health, create, status, cancel, approve
+  api.py               FastAPI API: health, tasks (create, status, cancel, approve), chat
   platform/
     tenancy.py         Users, workspaces, memberships, invitations (our tables)
     postgres_tenancy.py  The same tenancy semantics on PostgreSQL
@@ -112,7 +112,7 @@ src/personal_assistant_agent/
     stub.py            Stub model adapter (the brief's fallback path)
     trial.py           The D2 trial: 30 tasks, runner, blind review pack
 migrations/            Alembic tenancy schema and opt-in RLS policies
-tests/                 85 tests covering the cycle, slice 2, and the platform
+tests/                 90 tests covering the cycle, slice 2, and the platform
 examples/demo.py       End to end demo, including the permission gate
 docs/architecture.md   The canonical 10 layer model and invariants
 docs/ai-personal-agent-blueprint-v2.md   The adopted blueprint (version 2.0 revised)

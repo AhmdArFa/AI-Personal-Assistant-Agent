@@ -165,9 +165,7 @@ class _FakeCursor:
                 column = condition.split(" = ")[0].strip()
                 targets.append((column, params.pop(0)))
             self.engine.tables[table] = [
-                r
-                for r in rows
-                if not all(r.get(col) == val for col, val in targets)
+                r for r in rows if not all(r.get(col) == val for col, val in targets)
             ]
             return
         m = re.match(r"UPDATE (\w+) SET (\w+) = %s WHERE (\w+) = %s$", sql)
