@@ -11,6 +11,7 @@ from personal_assistant_agent.orchestrator import (
     PlanStep,
     RunStatus,
     StaticPlanner,
+    StrictInput,
     Tool,
     ToolRegistry,
     default_registry,
@@ -236,3 +237,135 @@ def test_unknown_tool_asks_user():
 def test_invalid_limits_rejected():
     with pytest.raises(ValueError):
         OrchestratorLimits(max_steps=0)
+
+
+class SearchInput(StrictInput):
+    query: str
+    top_k: int = 5
+
+
+def test_validation_missing_field_never_runs():
+    registry = ToolRegistry()
+    called = []
+    registry.register(
+        Tool(
+            name="search",
+            description="search",
+            permission=PermissionLevel.READ,
+            handler=lambda args: called.append(args) or "found",
+            input_model=SearchInput,
+        )
+    )
+    plan = Plan(
+        goal="search",
+        steps=[
+            PlanStep(
+                id="s1",
+                description="search",
+                tool_name="search",
+                tool_args={"top_k": 3},
+            )
+        ],
+    )
+    result = AgentOrchestrator(registry=registry, planner=StaticPlanner(plan)).run(
+        "search"
+    )
+    assert result.status is RunStatus.ASK_USER
+    assert "validation" in result.reason
+    assert called == []
+    assert any(
+        o.error and o.error.startswith("ValidationError")
+        for o in result.state.observations
+    )
+
+
+def test_validation_wrong_type_rejected():
+    registry = ToolRegistry()
+    called = []
+    registry.register(
+        Tool(
+            name="search",
+            description="search",
+            permission=PermissionLevel.READ,
+            handler=lambda args: called.append(args) or "found",
+            input_model=SearchInput,
+        )
+    )
+    plan = Plan(
+        goal="search",
+        steps=[
+            PlanStep(
+                id="s1",
+                description="search",
+                tool_name="search",
+                tool_args={"query": "x", "top_k": "not-a-number"},
+            )
+        ],
+    )
+    result = AgentOrchestrator(registry=registry, planner=StaticPlanner(plan)).run(
+        "search"
+    )
+    assert result.status is RunStatus.ASK_USER
+    assert called == []
+
+
+def test_validation_extra_field_rejected():
+    registry = ToolRegistry()
+    called = []
+    registry.register(
+        Tool(
+            name="search",
+            description="search",
+            permission=PermissionLevel.READ,
+            handler=lambda args: called.append(args) or "found",
+            input_model=SearchInput,
+        )
+    )
+    plan = Plan(
+        goal="search",
+        steps=[
+            PlanStep(
+                id="s1",
+                description="search",
+                tool_name="search",
+                tool_args={"query": "x", "user_id": "spoofed"},
+            )
+        ],
+    )
+    result = AgentOrchestrator(registry=registry, planner=StaticPlanner(plan)).run(
+        "search"
+    )
+    assert result.status is RunStatus.ASK_USER
+    assert "validation" in result.reason
+    assert called == []
+
+
+def test_validation_success_passes_model_to_handler():
+    registry = ToolRegistry()
+    seen = []
+    registry.register(
+        Tool(
+            name="search",
+            description="search",
+            permission=PermissionLevel.READ,
+            handler=lambda args: seen.append(args) or f"{args.query}:{args.top_k}",
+            input_model=SearchInput,
+        )
+    )
+    plan = Plan(
+        goal="search",
+        steps=[
+            PlanStep(
+                id="s1",
+                description="search",
+                tool_name="search",
+                tool_args={"query": "report", "top_k": 2},
+            )
+        ],
+    )
+    result = AgentOrchestrator(registry=registry, planner=StaticPlanner(plan)).run(
+        "search"
+    )
+    assert result.status is RunStatus.COMPLETED
+    assert result.answer == "report:2"
+    assert isinstance(seen[0], SearchInput)

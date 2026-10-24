@@ -196,6 +196,34 @@ class AgentOrchestrator:
         tool: Tool,
         started: float,
     ) -> AgentResult | None:
+        # Validate arguments before anything runs. A validation
+        # error is recorded and the tool is never executed.
+        try:
+            validated = tool.validate(step.tool_args)
+        except Exception as exc:  # pydantic ValidationError
+            detail = "; ".join(
+                f"{'.'.join(str(p) for p in e['loc'])}: {e['msg']}"
+                for e in getattr(exc, "errors", list)()
+            ) or str(exc)
+            error = f"ValidationError: {detail}"
+            state.observations.append(
+                Observation(
+                    step_id=step.id,
+                    tool_name=tool.name,
+                    success=False,
+                    error=error,
+                    attempt=0,
+                    duration_seconds=0.0,
+                )
+            )
+            state.log(f"tool_validation_failed step={step.id} error={error}")
+            return AgentResult(
+                status=RunStatus.ASK_USER,
+                answer=None,
+                state=state,
+                reason=(f"tool arguments for {tool.name} failed validation: {detail}"),
+                pending_step=step,
+            )
         max_attempts = 1 + self.limits.max_retries_per_step
         last_error = ""
         for attempt in range(1, max_attempts + 1):
@@ -210,7 +238,7 @@ class AgentOrchestrator:
                 )
             t0 = time.monotonic()
             try:
-                result = tool.handler(step.tool_args)
+                result = tool.handler(validated)
                 duration = time.monotonic() - t0
                 if duration > self.limits.per_tool_timeout_seconds:
                     raise TimeoutError(

@@ -6,12 +6,13 @@ from .orchestrator import AgentOrchestrator
 from .permissions import PermissionLevel, PermissionPolicy
 from .planner import RuleBasedPlanner, StaticPlanner
 from .state import AgentResult, AgentState, Intent, Plan, PlanStep, RunStatus
-from .tools import Tool, ToolRegistry, UnknownToolError
+from .tools import EmptyInput, StrictInput, Tool, ToolRegistry, UnknownToolError
 
 __all__ = [
     "AgentOrchestrator",
     "AgentResult",
     "AgentState",
+    "EmptyInput",
     "Intent",
     "OrchestratorLimits",
     "PermissionLevel",
@@ -21,6 +22,7 @@ __all__ = [
     "RuleBasedPlanner",
     "RunStatus",
     "StaticPlanner",
+    "StrictInput",
     "Tool",
     "ToolRegistry",
     "UnknownToolError",

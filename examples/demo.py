@@ -20,9 +20,14 @@ from personal_assistant_agent.orchestrator import (
     Plan,
     PlanStep,
     StaticPlanner,
+    StrictInput,
     Tool,
     default_registry,
 )
+
+
+class SendEmailInput(StrictInput):
+    to: str
 
 
 def show(title, result):
@@ -47,7 +52,8 @@ def main():
             name="send_email",
             description="Send an email to a recipient.",
             permission=PermissionLevel.EXTERNAL_EFFECT,
-            handler=lambda args: f"email sent to {args.get('to', 'unknown')}",
+            handler=lambda args: f"email sent to {args.to}",
+            input_model=SendEmailInput,
         )
     )
     plan = Plan(
