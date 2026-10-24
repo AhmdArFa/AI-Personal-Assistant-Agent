@@ -81,6 +81,10 @@ class AgentOrchestrator:
         self.checkpoint_store = checkpoint_store
         self.audit_sink = audit_sink
         self.redactor = redactor or Redactor()
+        self._active_tokens: dict[str, CancellationToken] = {}
+        import threading as _threading
+
+        self._active_lock = _threading.Lock()
 
     # ---------------------------------------------------------------
     def run(
@@ -88,6 +92,7 @@ class AgentOrchestrator:
         request: str,
         context: TenantContext | None = None,
         cancellation_token: CancellationToken | None = None,
+        task_id: str | None = None,
     ) -> AgentResult:
         if context is None:
             raise ValueError(
@@ -98,6 +103,8 @@ class AgentOrchestrator:
         state = AgentState(
             request=request, tenant=context, cancellation_token=cancellation_token
         )
+        if task_id:
+            state.task_id = task_id
         state.status = RunStatus.RUNNING
         state.log("request_received")
         if cancellation_token is not None and cancellation_token.is_cancelled:
@@ -120,7 +127,35 @@ class AgentOrchestrator:
             )
 
     # ---------------------------------------------------------------
+    def cancel_task(self, task_id: str) -> bool:
+        """Cancel an active run by task id. Returns False when no
+        run with that id is currently executing on this instance."""
+        with self._active_lock:
+            token = self._active_tokens.get(task_id)
+        if token is None:
+            return False
+        token.cancel()
+        return True
+
     def _run(
+        self,
+        state: AgentState,
+        started: float,
+        reuse_existing_plan: bool = False,
+    ) -> AgentResult:
+        if state.cancellation_token is None:
+            state.cancellation_token = CancellationToken()
+        token = state.cancellation_token
+        assert isinstance(token, CancellationToken)
+        with self._active_lock:
+            self._active_tokens[state.task_id] = token
+        try:
+            return self._run_inner(state, started, reuse_existing_plan)
+        finally:
+            with self._active_lock:
+                self._active_tokens.pop(state.task_id, None)
+
+    def _run_inner(
         self,
         state: AgentState,
         started: float,
