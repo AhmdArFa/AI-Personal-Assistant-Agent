@@ -10,7 +10,7 @@ that view is retired and must not be used in new material.
 | Layer | Responsibility | Status in this repo |
 |---|---|---|
 | 1. Interface Layer | Web UI, API clients, future messaging channels | Not started |
-| 2. API Layer | Authentication context, validation, task endpoints, streaming | Started: task status endpoint (issue 11), platform mode with token auth and database membership checks |
+| 2. API Layer | Authentication context, validation, task endpoints, streaming | Started: full task API (health, create, status, cancel, approve; W2) with platform mode token auth and database membership checks |
 | 3. Orchestrator Layer | Explicit state machine, retries, replans, checkpoints, cancellation, budgets | Built (Step 1 + Slice 2) |
 | 4. Model Gateway Layer | Provider routing, structured output, failover, token and cost accounting | Started: gateway with per provider budget shares and a stub adapter; D2 trial harness with the brief's 30 tasks |
 | 5. Tools and Skills Layer | Typed tools, permission levels, skills | Started: registry, strict schemas, builtin tools |
