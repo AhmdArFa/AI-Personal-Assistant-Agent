@@ -20,6 +20,11 @@ code, not in prompts:
   naming the employee's branch, is refused outright: no partial
   answer, no leaked rows. The raw data tool enforces the same rule
   on its results, refusing queries whose rows carry no branch.
+- Company scope is enforced in code, not in prompts. The store
+  carries an allowlist of tables and columns approved by the
+  company; any query touching anything outside it is rejected
+  before execution. Sensitive data stays out by construction: it
+  is never on the list, so no question can reach it.
 - Every question, query, answer, and refusal is recorded in an
   in memory audit log that can be rendered and inspected.
 
@@ -104,6 +109,383 @@ def validate_readonly_sql(sql: str) -> str:
     return stripped
 
 
+class CompanyScopeError(ValueError):
+    """A query touches data outside the company's approved scope."""
+
+
+def _normalize_name(name: str) -> str:
+    """Lowercase an identifier, stripped of quoting characters."""
+    return name.strip().strip('`"[]').lower()
+
+
+_SQL_KEYWORDS = frozenset(
+    [
+        "and",
+        "or",
+        "not",
+        "in",
+        "is",
+        "null",
+        "true",
+        "false",
+        "case",
+        "when",
+        "then",
+        "else",
+        "end",
+        "distinct",
+        "as",
+        "on",
+        "between",
+        "like",
+        "exists",
+        "cast",
+        "int",
+        "integer",
+        "text",
+        "real",
+        "blob",
+        "numeric",
+        "varchar",
+        "char",
+        "date",
+        "time",
+        "asc",
+        "desc",
+        "limit",
+        "offset",
+        "group",
+        "order",
+        "having",
+        "union",
+        "except",
+        "intersect",
+        "all",
+        "any",
+        "some",
+    ]
+)
+
+
+@dataclass
+class CompanyDataScope:
+    """The company's approved data: which tables and columns the agent may touch.
+
+    Built server side by the company admin when the company is
+    onboarded; it is never taken from question text or tool
+    arguments. Anything not on the list is unreachable: unknown
+    tables, unlisted columns, and star selects over tables with
+    unlisted columns are all rejected before execution. That is how
+    sensitive data stays out: it is never on the list, so no query
+    can reach it, whatever the question asks.
+    """
+
+    allowed: dict[str, tuple[str, ...]] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        normalized = {
+            _normalize_name(table): tuple(_normalize_name(c) for c in columns)
+            for table, columns in self.allowed.items()
+        }
+        object.__setattr__(self, "allowed", normalized)
+
+    @classmethod
+    def demo_default(cls) -> CompanyDataScope:
+        """The demo schema, fully allowed. Demo only, never production."""
+        return cls(
+            allowed={
+                "sales": (
+                    "id",
+                    "product",
+                    "customer",
+                    "branch",
+                    "quantity",
+                    "unit_price",
+                    "sale_date",
+                ),
+                "inventory": (
+                    "id",
+                    "product",
+                    "branch",
+                    "quantity_on_hand",
+                    "reorder_level",
+                ),
+            }
+        )
+
+    def allows_table(self, table: str) -> bool:
+        return _normalize_name(table) in self.allowed
+
+    def allows_column(self, table: str, column: str) -> bool:
+        columns = self.allowed.get(_normalize_name(table))
+        return columns is not None and _normalize_name(column) in columns
+
+
+def _strip_comments(sql: str) -> str:
+    stripped = re.sub(r"/\*.*?\*/", " ", sql, flags=re.DOTALL)
+    return re.sub(r"--[^\n]*", " ", stripped)
+
+
+def _extract_cte_names(sql: str) -> set[str]:
+    """CTE names defined by a leading WITH clause, if any."""
+    match = re.match(r"\s*WITH\s+", sql, re.IGNORECASE)
+    if not match:
+        return set()
+    rest = sql[match.end() :]
+    rest = re.sub(r"^RECURSIVE\s+", "", rest, flags=re.IGNORECASE)
+    names: set[str] = set()
+    i = 0
+    while True:
+        cte = re.match(r"([A-Za-z_][\w$]*)\s+AS\s*\(", rest[i:], re.IGNORECASE)
+        if not cte:
+            break
+        names.add(_normalize_name(cte.group(1)))
+        depth = 0
+        j = i + cte.end() - 1
+        while j < len(rest):
+            if rest[j] == "(":
+                depth += 1
+            elif rest[j] == ")":
+                depth -= 1
+                if depth == 0:
+                    break
+            j += 1
+        i = j + 1
+        while i < len(rest) and rest[i] in " \t\n,":
+            i += 1
+        if re.match(r"SELECT\b", rest[i:], re.IGNORECASE):
+            break
+    return names
+
+
+_CLAUSE_KEYWORDS = (
+    "WHERE",
+    "GROUP",
+    "ORDER",
+    "LIMIT",
+    "HAVING",
+    "WINDOW",
+    "UNION",
+    "EXCEPT",
+    "INTERSECT",
+    "JOIN",
+    "ON",
+)
+
+
+def _extract_tables(sql: str, cte_names: set[str]) -> list[str]:
+    """Table names referenced by FROM, JOIN, and comma joins.
+
+    CTE names are excluded: they are query local, and their bodies
+    are scanned separately by the same FROM/JOIN pass.
+    """
+    tables: list[str] = []
+    ident = r"[`\"\[]?[\w$]+[`\"\]]?(?:\s*\.\s*[`\"\[]?[\w$]+[`\"\]]?)?"
+    for match in re.finditer(r"\b(?:FROM|JOIN)\s+(" + ident + r")", sql, re.IGNORECASE):
+        name = _normalize_name(match.group(1).split(".")[-1])
+        if name and name != "(" and name not in cte_names:
+            tables.append(name)
+    for match in re.finditer(r"\bFROM\b", sql, re.IGNORECASE):
+        depth = 0
+        segments: list[str] = []
+        start: int | None = None
+        j = match.end()
+        while j < len(sql):
+            char = sql[j]
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+            if depth == 0:
+                word = re.match(r"[A-Za-z_][\w$]*", sql[j:])
+                if word and word.group(0).upper() in _CLAUSE_KEYWORDS:
+                    break
+                if char == ",":
+                    if start is not None:
+                        segments.append(sql[start:j])
+                    start = j + 1
+            j += 1
+        if start is not None:
+            segments.append(sql[start:j])
+        for piece in segments:
+            first = re.match(ident, piece.strip())
+            if first:
+                name = _normalize_name(first.group(0).split(".")[-1])
+                if name and name not in cte_names:
+                    tables.append(name)
+    seen: list[str] = []
+    for table in tables:
+        if table not in seen:
+            seen.append(table)
+    return seen
+
+
+def _select_lists(sql: str) -> list[str]:
+    """The SELECT lists of the statement and its subqueries.
+
+    Each list runs from a SELECT keyword to its matching top level
+    FROM (parentheses tracked, so scalar subqueries get their own
+    list instead of corrupting the outer one).
+    """
+    lists: list[str] = []
+    for match in re.finditer(r"\bSELECT\b", sql, re.IGNORECASE):
+        depth = 0
+        j = match.end()
+        while j < len(sql):
+            char = sql[j]
+            if char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+            if depth == 0:
+                word = re.match(r"FROM\b", sql[j:], re.IGNORECASE)
+                if word:
+                    lists.append(sql[match.end() : j])
+                    break
+            j += 1
+    return lists
+
+
+def _parse_select_item(item: str) -> list[tuple[str | None, str | None]]:
+    """Column references in one SELECT item.
+
+    Returns (table, column) pairs; (None, "*") for a bare star and
+    (table, "*") for a qualified star. Function names, keywords, and
+    type names are not columns. A star inside a function call (for
+    example COUNT(*)) is not a column reference.
+    """
+    refs: list[tuple[str | None, str | None]] = []
+    item = item.strip()
+    item = re.sub(r"\s+AS\s+[A-Za-z_][\w$]*\s*$", "", item, flags=re.IGNORECASE)
+    if not item:
+        return refs
+    if re.match(r"\(\s*SELECT\b", item, re.IGNORECASE):
+        return refs
+    depth = 0
+    i = 0
+    while i < len(item):
+        char = item[i]
+        if char == "'":
+            end = item.find("'", i + 1)
+            while end != -1 and end + 1 < len(item) and item[end + 1] == "'":
+                end = item.find("'", end + 2)
+            i = len(item) if end == -1 else end + 1
+            continue
+        if char == "(":
+            depth += 1
+            i += 1
+            continue
+        if char == ")":
+            depth -= 1
+            i += 1
+            continue
+        if char == "*" and depth == 0:
+            before = item[:i].rstrip()
+            dot = re.match(r"([A-Za-z_][\w$]*)\s*\.\s*$", before)
+            refs.append((_normalize_name(dot.group(1)) if dot else None, "*"))
+            i += 1
+            continue
+        word = re.match(r"[A-Za-z_][\w$]*", item[i:])
+        if not word:
+            i += 1
+            continue
+        name = word.group(0)
+        after = item[i + len(name) :].lstrip()
+        if after.startswith("("):
+            i += len(name)
+            continue
+        if name.lower() in _SQL_KEYWORDS:
+            i += len(name)
+            continue
+        if after.startswith("."):
+            rest = after[1:].lstrip()
+            col = re.match(r"[A-Za-z_][\w$]*|\*", rest)
+            if col:
+                refs.append((_normalize_name(name), _normalize_name(col.group(0))))
+                i += len(name) + (len(after) - len(rest)) + len(col.group(0))
+                continue
+        refs.append((None, _normalize_name(name)))
+        i += len(name)
+    return refs
+
+
+def _split_top_level_commas(text: str) -> list[str]:
+    parts: list[str] = []
+    depth = 0
+    start = 0
+    for i, char in enumerate(text):
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+        elif char == "," and depth == 0:
+            parts.append(text[start:i])
+            start = i + 1
+    parts.append(text[start:])
+    return parts
+
+
+def validate_company_scope(
+    sql: str,
+    scope: CompanyDataScope,
+    schema: dict[str, list[str]] | None = None,
+) -> str:
+    """Reject a validated SELECT that touches data outside the scope.
+
+    Checks every table the query reads, every column it selects, and
+    every star expansion. Unknown tables, unlisted columns, stars
+    over tables with unlisted columns, and unqualified columns in
+    multi table queries are all rejected. Raises CompanyScopeError
+    naming the offending table or column; returns the SQL unchanged
+    when it is inside the scope.
+    """
+    clean = _strip_comments(sql).strip()
+    cte_names = _extract_cte_names(clean)
+    tables = _extract_tables(clean, cte_names)
+    for table in tables:
+        if not scope.allows_table(table):
+            raise CompanyScopeError(f"table outside company scope: {table}")
+    for select_list in _select_lists(clean):
+        select_list = re.sub(r"^\s*DISTINCT\s+", "", select_list, flags=re.IGNORECASE)
+        for item in _split_top_level_commas(select_list):
+            for table, column in _parse_select_item(item):
+                if column == "*":
+                    star_tables = [table] if table else tables
+                    for star_table in star_tables:
+                        if star_table not in (schema or {}):
+                            raise CompanyScopeError(
+                                "star select over table with unknown schema:"
+                                f" {star_table}"
+                            )
+                        outside = [
+                            col
+                            for col in schema[star_table]
+                            if not scope.allows_column(star_table, col)
+                        ]
+                        if outside:
+                            raise CompanyScopeError(
+                                "star select over table with columns outside"
+                                f" company scope: {star_table} ({outside[0]})"
+                            )
+                    continue
+                if table is not None:
+                    if not scope.allows_column(table, column or ""):
+                        raise CompanyScopeError(
+                            f"column outside company scope: {table}.{column}"
+                        )
+                elif len(tables) == 1:
+                    if not scope.allows_column(tables[0], column or ""):
+                        raise CompanyScopeError(
+                            f"column outside company scope: {column}"
+                        )
+                else:
+                    raise CompanyScopeError(
+                        "unqualified column in multi table query:"
+                        f" {column} (use table.column)"
+                    )
+    return sql
+
+
 @dataclass
 class BusinessDataStore:
     """SQLite store for demo business data.
@@ -111,11 +493,16 @@ class BusinessDataStore:
     Seeded in memory with small fixed demo tables, then switched to
     query only mode. The demo dates are relative to today, so the
     "this month" questions stay answerable whenever the demo runs.
+    The store also owns the company data scope: every query runs
+    through it, so data outside the approved list cannot be read
+    through any path, tool or direct.
     """
 
+    company_scope: CompanyDataScope | None = None
     connection: sqlite3.Connection = field(init=False)
 
     def __post_init__(self) -> None:
+        self.company_scope = self.company_scope or CompanyDataScope.demo_default()
         conn = sqlite3.connect(":memory:")
         conn.row_factory = sqlite3.Row
         conn.executescript(
@@ -175,21 +562,42 @@ class BusinessDataStore:
         )
         self.connection.commit()
 
+    def schema(self) -> dict[str, list[str]]:
+        """Table to columns mapping, from the live database."""
+        tables = [
+            row[0]
+            for row in self.connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            )
+        ]
+        return {
+            table: [
+                row[1] for row in self.connection.execute(f"PRAGMA table_info({table})")
+            ]
+            for table in tables
+        }
+
     def query(self, sql: str, params: tuple = (), limit: int = 50) -> list[dict]:
         """Run a validated read only query and return rows as dicts.
 
         Values are always passed as parameters, never interpolated
         into the SQL string, so a value can never change the shape
-        of the query.
+        of the query. The company scope is enforced before execution:
+        a query touching a table or column outside the approved list
+        raises CompanyScopeError and nothing runs.
         """
         clean = validate_readonly_sql(sql)
+        assert self.company_scope is not None
+        validate_company_scope(clean, self.company_scope, self.schema())
         cursor = self.connection.execute(clean, params)
         rows = [dict(row) for row in cursor.fetchmany(limit)]
         return rows
 
 
-def seed_demo_store() -> BusinessDataStore:
-    return BusinessDataStore()
+def seed_demo_store(
+    company_scope: CompanyDataScope | None = None,
+) -> BusinessDataStore:
+    return BusinessDataStore(company_scope=company_scope)
 
 
 @dataclass(frozen=True)
@@ -236,7 +644,22 @@ def make_query_business_data_tool(
     """
 
     def handler(args: BusinessQueryInput, context: TenantContext):
-        rows = store.query(args.sql, limit=args.limit)
+        try:
+            rows = store.query(args.sql, limit=args.limit)
+        except CompanyScopeError as exc:
+            if audit is not None:
+                audit.record(
+                    AuditEntry(
+                        question="",
+                        outcome="refused",
+                        answer="",
+                        query=args.sql,
+                        role=scope.role,
+                        scope_branches=scope.branches,
+                        reason=f"company scope: {exc}",
+                    )
+                )
+            raise PermissionError(f"query outside company data scope: {exc}") from exc
         if scope.role == "employee":
             if rows and "branch" not in rows[0]:
                 if audit is not None:
@@ -394,6 +817,18 @@ def _in_condition(column: str, values: list[str], params: list) -> str:
     return f"{column} IN ({', '.join('?' * len(values))})"
 
 
+class _ScopeRefusal(Exception):
+    """Internal control flow: a demo query hit the company scope wall."""
+
+
+def _scoped_query(store: BusinessDataStore, sql: str, params: list) -> list[dict]:
+    """Run a demo query, converting a scope wall into a refusal signal."""
+    try:
+        return store.query(sql, tuple(params))
+    except CompanyScopeError as exc:
+        raise _ScopeRefusal(str(exc)) from exc
+
+
 def _answer_business_question(
     question: str, store: BusinessDataStore, scope: BusinessScope
 ) -> AnswerWithEvidence:
@@ -444,7 +879,7 @@ def _answer_business_question(
             "SELECT product, branch, quantity_on_hand, reorder_level"
             " FROM inventory WHERE " + " AND ".join(conditions) + " ORDER BY product"
         )
-        rows = store.query(sql, tuple(params))
+        rows = _scoped_query(store, sql, params)
         if not rows:
             return _fallback()
         names = "، ".join(row["product"] for row in rows)
@@ -469,7 +904,7 @@ def _answer_business_question(
             "SELECT customer, SUM(quantity * unit_price) AS total"
             f" FROM sales{where} GROUP BY customer ORDER BY total DESC LIMIT 1"
         )
-        rows = store.query(sql, tuple(params))
+        rows = _scoped_query(store, sql, params)
         if not rows:
             return _fallback()
         row = rows[0]
@@ -507,7 +942,7 @@ def _answer_business_question(
             return _fallback()
         where = " WHERE " + " AND ".join(conditions) if conditions else ""
         sql = f"SELECT SUM(quantity * unit_price) AS total FROM sales{where}"
-        rows = store.query(sql, tuple(params))
+        rows = _scoped_query(store, sql, params)
         total = rows[0]["total"] if rows and rows[0]["total"] is not None else None
         if total is None:
             return _fallback()
@@ -551,9 +986,17 @@ def answer_business_question(
 
     The scope defaults to the owner (everything). Pass an employee
     scope to constrain answers to their branches; out of scope
-    questions are refused, never partially answered.
+    questions are refused, never partially answered. A question
+    whose data falls outside the store's company scope is refused
+    the same way, with no rows shown.
     """
-    result = _answer_business_question(question, store, scope)
+    try:
+        result = _answer_business_question(question, store, scope)
+    except _ScopeRefusal as exc:
+        result = _refusal(
+            "السؤال ده بيحتاج داتا بره النطاق المعتمد للشركة.",
+            reason=f"company scope: {exc}",
+        )
     if audit is not None:
         if result.refused:
             outcome = "refused"
