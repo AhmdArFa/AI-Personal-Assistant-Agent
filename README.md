@@ -113,7 +113,7 @@ src/personal_assistant_agent/
     stub.py            Stub model adapter (the brief's fallback path)
     trial.py           The D2 trial: 30 tasks, runner, blind review pack
 migrations/            Alembic tenancy schema and opt-in RLS policies
-tests/                 101 tests covering the cycle, slices, and the platform
+tests/                 150 tests covering the cycle, slices, and the platform
 web/                   React and TypeScript frontend baseline (W7)
 evals/                 Bilingual evaluation suite (python -m evals), a release gate
 examples/demo.py       End to end demo, including the permission gate
