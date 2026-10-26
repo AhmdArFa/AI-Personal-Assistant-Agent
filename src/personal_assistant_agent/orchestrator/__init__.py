@@ -12,10 +12,13 @@ from .business_qa import (
     BusinessDataStore,
     BusinessQueryInput,
     BusinessScope,
+    CompanyDataScope,
+    CompanyScopeError,
     answer_business_question,
     make_query_business_data_tool,
     registry_with_business_qa,
     seed_demo_store,
+    validate_company_scope,
     validate_readonly_sql,
 )
 from .cancellation import CancellationToken, RunCancelled
@@ -69,6 +72,8 @@ __all__ = [
     "BusinessScope",
     "CancellationToken",
     "CheckpointStore",
+    "CompanyDataScope",
+    "CompanyScopeError",
     "DocumentCorpus",
     "DocumentRecord",
     "EmptyInput",
@@ -107,5 +112,6 @@ __all__ = [
     "registry_with_documents",
     "seed_demo_store",
     "seeded_corpus",
+    "validate_company_scope",
     "validate_readonly_sql",
 ]

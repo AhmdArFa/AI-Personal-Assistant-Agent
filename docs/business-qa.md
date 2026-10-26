@@ -71,6 +71,43 @@ built from the start, and this slice implements it in code:
   and inspected, so any number can be traced back to its source
   later.
 
+## Company data scope: the approved list
+
+This is what makes the security promise real, and it is enforced
+in code, not in prompts. The store carries a `CompanyDataScope`:
+the tables and columns the company approved when it was onboarded.
+The scope is built server side by the company admin; it never
+comes from question text or tool arguments, so wording cannot
+widen it.
+
+- **Anything not on the list is unreachable.** Unknown tables,
+  unlisted columns, and star selects over tables with unlisted
+  columns are rejected before execution, and nothing runs.
+- **Sensitive data stays out by construction.** Credentials,
+  passwords, personal identity documents, and payroll style
+  sensitive fields are never on the list, so no question can
+  reach them, whatever it asks.
+- **Stars are expanded against the real schema.** A `SELECT *`
+  is allowed only when every column of the table is on the list.
+  A qualified star (`sales.*`) is checked the same way.
+- **Multi table queries must qualify their columns.** An
+  unqualified column in a multi table query is rejected as
+  ambiguous, so a column can never silently resolve to the wrong
+  table.
+- **Refusals are audited.** A scope refusal at the tool raises
+  `PermissionError` and is recorded in the audit log with the
+  offending table or column named. The demo answerer turns the
+  same wall into a clean refusal with no rows shown.
+- **The two scopes compose.** The company scope (what data
+  exists for this company at all) and the role scope (what this
+  caller may see: owner everything, employee their branches)
+  are both enforced. A query must pass both walls.
+
+The demo default (`CompanyDataScope.demo_default`) allows the
+full demo schema. It exists for the demo only; a real deployment
+builds its scope from the company's approved schema, and nothing
+else is reachable.
+
 ## Pilot plan
 
 - **One data source first:** sales or inventory, not everything
