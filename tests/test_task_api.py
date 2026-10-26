@@ -229,8 +229,7 @@ def test_status_exposes_pending_approval_arguments():
     store = InMemoryCheckpointStore()
     sent = []
     client, _ = _client(_approval_orchestrator(store, sent), store)
-    created = client.post(
-        "/api/v1/tasks", json={"request": "send it"}, headers=HEADERS)
+    created = client.post("/api/v1/tasks", json={"request": "send it"}, headers=HEADERS)
     task_id = created.json()["task_id"]
     status = client.get(f"/api/v1/tasks/{task_id}", headers=HEADERS)
     pending = status.json()["pending_approval"]

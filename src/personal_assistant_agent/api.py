@@ -226,9 +226,7 @@ def create_app(
                 obs.error for obs in state.observations if not obs.success and obs.error
             ]
             error_summary = failures[-1] if failures else ""
-        pending = next(
-            (a for a in state.approvals if a.status == "pending"), None
-        )
+        pending = next((a for a in state.approvals if a.status == "pending"), None)
         return {
             "task_id": state.task_id,
             "status": state.status.value,

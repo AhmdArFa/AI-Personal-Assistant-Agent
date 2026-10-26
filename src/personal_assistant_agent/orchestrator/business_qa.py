@@ -425,6 +425,160 @@ def _split_top_level_commas(text: str) -> list[str]:
     return parts
 
 
+_EXTRA_KEYWORDS = frozenset(
+    [
+        "select",
+        "from",
+        "join",
+        "where",
+        "by",
+        "with",
+        "recursive",
+        "left",
+        "right",
+        "inner",
+        "outer",
+        "full",
+        "cross",
+        "natural",
+        "using",
+        "over",
+        "partition",
+        "rows",
+        "range",
+        "unbounded",
+        "preceding",
+        "following",
+        "current",
+        "row",
+        "filter",
+        "collate",
+        "isnull",
+        "notnull",
+        "glob",
+        "match",
+        "key",
+        "foreign",
+        "primary",
+        "unique",
+        "check",
+        "default",
+        "autoincrement",
+    ]
+)
+
+
+def _blank_string_literals(text: str) -> str:
+    """Replace quoted string contents with spaces, so a literal can
+    never be mistaken for a table or column name."""
+    out: list[str] = []
+    i = 0
+    while i < len(text):
+        if text[i] == "'":
+            out.append(" ")
+            i += 1
+            while i < len(text):
+                if text[i] == "'":
+                    if i + 1 < len(text) and text[i + 1] == "'":
+                        out.extend("  ")
+                        i += 2
+                        continue
+                    out.append(" ")
+                    i += 1
+                    break
+                out.append(" ")
+                i += 1
+            continue
+        out.append(text[i])
+        i += 1
+    return "".join(out)
+
+
+def _table_aliases(text: str) -> dict[str, str]:
+    """Alias to table mapping from FROM and JOIN clauses."""
+    aliases: dict[str, str] = {}
+    ident = r"[`\"\[\]]?[\w$]+[`\"\[\]]?"
+    pattern = (
+        r"\b(?:FROM|JOIN)\s+(" + ident + r")"
+        r"(?:\s+AS\s+|\s+)(" + ident + r")?"
+    )
+    for match in re.finditer(pattern, text, re.IGNORECASE):
+        table = _normalize_name(match.group(1).split(".")[-1])
+        alias = match.group(2)
+        if alias:
+            alias_name = _normalize_name(alias.split(".")[-1])
+            if alias_name not in _SQL_KEYWORDS | _EXTRA_KEYWORDS:
+                aliases[alias_name] = table
+    return aliases
+
+
+def _validate_all_columns(
+    sql: str,
+    scope: CompanyDataScope,
+    tables: list[str],
+    cte_names: set[str],
+) -> None:
+    """Check every column reference in the whole statement, not
+    only the select lists.
+
+    A select-list-only check leaves a hole: an unlisted column can
+    still be probed through WHERE, JOIN ON, GROUP BY, HAVING, and
+    ORDER BY, and its values leak by which rows come back and in
+    what order. So this pass walks every identifier outside string
+    literals: function names, keywords, table names, CTE names,
+    table aliases, and select-list output aliases are skipped, and
+    every other reference must name an allowed column of its table
+    (unqualified references resolve only in single table queries).
+    """
+    text = _blank_string_literals(sql)
+    aliases = _table_aliases(text)
+    output_aliases = {
+        _normalize_name(match.group(1))
+        for match in re.finditer(r"\bAS\s+([A-Za-z_][\w$]*)", text, re.IGNORECASE)
+    }
+    skip = _SQL_KEYWORDS | _EXTRA_KEYWORDS
+    for match in re.finditer(
+        r"([A-Za-z_][\w$]*)\s*(?:\.\s*([A-Za-z_][\w$]*|\*))?", text
+    ):
+        name = _normalize_name(match.group(1))
+        qualifier = match.group(2)
+        rest = text[match.end() :].lstrip()
+        if rest.startswith("("):
+            continue  # function name; its arguments are scanned separately
+        if name in skip:
+            continue
+        if qualifier is not None:
+            if qualifier == "*":
+                continue  # star expansion is checked by the select pass
+            qualifier_name = _normalize_name(qualifier.split(".")[-1])
+            resolved = aliases.get(name, name)
+            if resolved in cte_names:
+                continue
+            if resolved not in tables:
+                raise CompanyScopeError(
+                    f"column with unknown table qualifier: {name}.{qualifier_name}"
+                )
+            if not scope.allows_column(resolved, qualifier_name):
+                raise CompanyScopeError(
+                    f"column outside company scope: {resolved}.{qualifier_name}"
+                )
+            continue
+        if (
+            name in tables
+            or name in cte_names
+            or name in aliases
+            or name in output_aliases
+        ):
+            continue
+        if len(tables) == 1:
+            if not scope.allows_column(tables[0], name):
+                raise CompanyScopeError(f"column outside company scope: {name}")
+        else:
+            raise CompanyScopeError(
+                f"unqualified column in multi table query: {name} (use table.column)"
+            )
+
+
 def validate_company_scope(
     sql: str,
     scope: CompanyDataScope,
@@ -432,12 +586,14 @@ def validate_company_scope(
 ) -> str:
     """Reject a validated SELECT that touches data outside the scope.
 
-    Checks every table the query reads, every column it selects, and
-    every star expansion. Unknown tables, unlisted columns, stars
-    over tables with unlisted columns, and unqualified columns in
-    multi table queries are all rejected. Raises CompanyScopeError
-    naming the offending table or column; returns the SQL unchanged
-    when it is inside the scope.
+    Checks every table the query reads, every column it selects,
+    every star expansion, and every column referenced anywhere
+    else in the statement (filters, joins, grouping, ordering).
+    Unknown tables, unlisted columns, stars over tables with
+    unlisted columns, and unqualified columns in multi table
+    queries are all rejected. Raises CompanyScopeError naming the
+    offending table or column; returns the SQL unchanged when it
+    is inside the scope.
     """
     clean = _strip_comments(sql).strip()
     cte_names = _extract_cte_names(clean)
@@ -483,6 +639,7 @@ def validate_company_scope(
                         "unqualified column in multi table query:"
                         f" {column} (use table.column)"
                     )
+    _validate_all_columns(clean, scope, tables, cte_names)
     return sql
 
 

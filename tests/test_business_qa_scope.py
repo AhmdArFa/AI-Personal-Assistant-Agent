@@ -221,3 +221,43 @@ def test_company_scope_composes_with_role_scope():
         None,
     )
     assert rows and all(row["branch"] == "القاهرة" for row in rows)
+
+
+def test_unlisted_column_in_where_is_rejected(no_customer_store):
+    # The hole this closes: the select list alone was checked, so a
+    # column outside the scope could still be probed through a
+    # filter, and its values leaked by which rows came back.
+    with pytest.raises(CompanyScopeError, match="customer"):
+        no_customer_store.query("SELECT product FROM sales WHERE customer = 'x'")
+
+
+def test_unlisted_column_in_order_and_group_is_rejected(no_customer_store):
+    with pytest.raises(CompanyScopeError, match="customer"):
+        no_customer_store.query("SELECT product FROM sales ORDER BY customer LIMIT 5")
+    with pytest.raises(CompanyScopeError, match="customer"):
+        no_customer_store.query("SELECT product, COUNT(*) FROM sales GROUP BY customer")
+
+
+def test_unlisted_column_in_join_condition_is_rejected(no_customer_store):
+    with pytest.raises(CompanyScopeError, match="customer"):
+        no_customer_store.query(
+            "SELECT sales.product FROM sales JOIN inventory "
+            "ON sales.customer = inventory.branch"
+        )
+
+
+def test_listed_columns_and_select_aliases_still_pass(no_customer_store):
+    rows = no_customer_store.query(
+        "SELECT product, SUM(quantity * unit_price) AS total FROM sales "
+        "WHERE branch = 'القاهرة' GROUP BY product ORDER BY total DESC LIMIT 5"
+    )
+    assert rows
+
+
+def test_string_literal_that_looks_like_a_column_is_not_a_reference(
+    no_customer_store,
+):
+    rows = no_customer_store.query(
+        "SELECT product FROM sales WHERE branch = 'customer' LIMIT 5"
+    )
+    assert isinstance(rows, list)
