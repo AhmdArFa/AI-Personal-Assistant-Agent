@@ -113,7 +113,7 @@ src/personal_assistant_agent/
     stub.py            Stub model adapter (the brief's fallback path)
     trial.py           The D2 trial: 30 tasks, runner, blind review pack
 migrations/            Alembic tenancy schema and opt-in RLS policies
-tests/                 150 tests covering the cycle, slices, and the platform
+tests/                 171 tests covering the cycle, slices, the platform, and Business Q&A (one needs a Postgres DSN)
 web/                   React and TypeScript frontend baseline (W7)
 evals/                 Bilingual evaluation suite (python -m evals), a release gate
 examples/demo.py       End to end demo, including the permission gate
@@ -132,8 +132,8 @@ docs/ai-personal-agent-blueprint-v2.md   The adopted blueprint (version 2.0 revi
 ## Roadmap (blueprint section 18 numbering)
 
 - [x] Phase 0: Requirements: canonical blueprint and decision briefs (decisions D1 to D6 are tracked in the blueprint, still open)
-- [ ] Phase 1: Secure foundation: partly built against stubs (FastAPI app, tenancy store, identity boundary, audit foundation); the chosen identity provider waits on D1
-- [ ] Phase 2: Model gateway and chat: partly built (gateway interface, stub adapter, budget ledger, trial harness); the hosted provider waits on D2, the chat endpoint is work package W4
+- [ ] Phase 1: Secure foundation: partly built against stubs (FastAPI app, tenancy store with a PostgreSQL implementation and migrations, identity boundary, audit foundation); the chosen identity provider waits on D1
+- [ ] Phase 2: Model gateway and chat: partly built (gateway interface, stub adapter, budget ledger, trial harness, chat endpoint with usage limits); the hosted provider waits on D2
 - [x] Phase 3: Orchestration and first tool: built (Slice 2, issues 1 to 14, complete: strict schemas, tenant context, cancellation, checkpoints, approvals, budgets, redaction, task status, `search_documents`)
 - [ ] Phase 4: RAG (needs D4 and D5)
 - [ ] Phase 5: Memory (needs D1 and D4)
@@ -142,7 +142,7 @@ docs/ai-personal-agent-blueprint-v2.md   The adopted blueprint (version 2.0 revi
 - [ ] Phase 8: Controlled computer interaction
 - [ ] Phase 9: Production hardening
 
-The remaining work packages, in order, are in `BUILD_BRIEF.md` (W2 to W8).
+Work packages W1 to W7 are merged; W8 (real adapters) waits on D1 and D2. Status and acceptance records are in `BUILD_BRIEF.md`.
 
 ## License
 
