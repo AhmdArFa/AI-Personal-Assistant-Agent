@@ -5,6 +5,11 @@ model from the adopted blueprint (docs/ai-personal-agent-blueprint-v2.md, sectio
 Earlier drafts of this repository used a different 8-layer view;
 that view is retired and must not be used in new material.
 
+Product specs build on this model and never replace it. The Head Manager
+spec ([head-manager-spec.md](head-manager-spec.md)) is one: it is proposed
+scope, subordinate to the blueprint, and where it conflicts with this file or
+the blueprint, they win.
+
 ## Layers
 
 | Layer | Responsibility | Status in this repo |
