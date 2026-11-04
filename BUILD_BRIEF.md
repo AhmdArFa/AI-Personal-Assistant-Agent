@@ -1,8 +1,8 @@
-# Build Brief v2: what is actually left to build
+# Build Brief v2: work packages and status
 
-**Verified against:** `main` at commit `58b9d1d` (2026-10-24). `pytest -q` gives 75 passed; `ruff check src tests examples` is clean.
+**Verified against:** `main` at commit `cd4fd4e` (2026-10-26). `pytest -q` gives 170 passed and 1 skipped (the Postgres tenancy test needs `TENANCY_TEST_DSN`, which CI provides); `ruff check src tests examples evals` is clean.
 
-**This brief replaces** `BUILD_BRIEF.md` and `BUILD_BRIEF_SLICE_2.md`. Both describe the repository before Slice 2 (12 tests, no tenant context) and must not be handed to anyone. Retire them.
+**History.** This brief replaced the earlier `BUILD_BRIEF.md` and `BUILD_BRIEF_SLICE_2.md`, which described the repository before Slice 2 and were retired by W1 (PR #20).
 
 **For:** the engineer or coding agent implementing the next work.
 **Read first:** `README.md`, `docs/architecture.md`, `docs/ai-personal-agent-blueprint-v2.md`, `docs/decisions/D1-D2-decision-brief.md`. The Blueprint is the specification and wins on any conflict. Check the code before trusting any status line in any document; several are stale (see W1).
@@ -37,7 +37,7 @@ Package `personal_assistant_agent`, `src/` layout, Python 3.11+, runtime depende
 | `platform/gateway.py` | `ModelGateway`, `ModelProvider` protocol, `BudgetLedger` (per-provider shares, abort at 80 percent of own share) |
 | `platform/stub.py` | `StubProvider` (deterministic, zero cost) |
 | `platform/trial.py` | The D2 trial harness: 30 tasks, runner, blind review pack |
-| `api.py` | FastAPI app with one endpoint: `GET /api/v1/tasks/{task_id}`, in header mode or platform mode (Bearer token plus database membership); other tenant's task returns 404 |
+| `api.py` | FastAPI app: `GET /api/v1/health`, `POST /api/v1/tasks`, `GET /api/v1/tasks/{task_id}`, `POST /api/v1/tasks/{task_id}/cancel`, `POST /api/v1/tasks/{task_id}/approve`, `POST /api/v1/chat`; header mode or platform mode (Bearer token plus database membership); another tenant's task returns 404 |
 
 Behavior to preserve: bounded runs, answers built only from observed results, redaction before storage and return, tenant-scoped everything, and "the model proposes, policy decides".
 
@@ -66,6 +66,21 @@ Until they close: build against the existing protocols and stubs, pick no vendor
 ## 4. Work packages, in order
 
 Each package is one PR. "Done when" is the acceptance test.
+
+### Status (from the merged PR list, 2026-11-04)
+
+| Package | Status | PR |
+| --- | --- | --- |
+| W1 Sync documents to the code | Merged | #20 |
+| W2 Complete the task API | Merged | #21 |
+| W3 PostgreSQL tenancy store and migrations | Merged | #23 |
+| W4 Chat endpoint through the gateway | Merged | #24 |
+| W5 Model-backed intent and planner | Merged | #25 |
+| W6 Product evaluation suite | Merged | #26, #27 |
+| W7 Frontend baseline | Merged | #28 |
+| W8 Real adapters | Blocked on D1 and D2 | none |
+
+Merged means the PR is in `main` and the suite passes. Not re-checked item by item in this sync: the Postgres half of W3's acceptance test runs only where `TENANCY_TEST_DSN` is set (CI), and W7's browser rendering (Arabic, English, mixed text; the approval screen) was not opened in a browser. `web/` does typecheck and build. The W1 to W7 sections below are kept as the acceptance record.
 
 ### W1: Sync documents to the code (do first; no code risk)
 

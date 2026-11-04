@@ -738,8 +738,8 @@ flowchart LR
 | Phase | Status | Deliverables | Exit criteria |
 | --- | --- | --- | --- |
 | 0. Requirements | To confirm | Top use cases, roles, bilingual acceptance tests, provider data policy, budget, threat model | Clear scope, measurable acceptance criteria, threat model |
-| 1. Secure foundation | **Partly built** (foundation against stubs: FastAPI app, tenancy store interface, identity boundary, audit foundation; chosen identity provider waits on D1) | React shell, FastAPI, identity provider, workspaces, PostgreSQL, migrations, CI, audit foundation | Authenticated users, workspace checks enforced, no secrets in logs |
-| 2. Model gateway and chat | **Partly built** (gateway interface, stub adapter, budget ledger, 30 task trial harness; hosted provider waits on D2; chat endpoint is W4 in BUILD_BRIEF.md) | One hosted provider, streaming, language preferences, quotas, usage tracking, provider-error handling | Stable bilingual responses with useful error messages |
+| 1. Secure foundation | **Partly built** (foundation against stubs: FastAPI app, tenancy store with a PostgreSQL implementation and migrations (W3), identity boundary, audit foundation; chosen identity provider waits on D1) | React shell, FastAPI, identity provider, workspaces, PostgreSQL, migrations, CI, audit foundation | Authenticated users, workspace checks enforced, no secrets in logs |
+| 2. Model gateway and chat | **Partly built** (gateway interface, stub adapter, budget ledger, 30 task trial harness, chat endpoint with usage limits (W4); hosted provider waits on D2) | One hosted provider, streaming, language preferences, quotas, usage tracking, provider-error handling | Stable bilingual responses with useful error messages |
 | 3. Orchestration and first tool | **Built** (Slice 2 complete, issues 1 to 14 closed, CI green) | Tool schemas, state machine, bounded steps, task status, cancellation, tracing | Arguments validated; tasks complete, fail safely, or stop with a useful partial result |
 | 4. RAG | Not started | Secure uploads, parsing, chunking, embeddings, retrieval, citations, language evaluation, cross-user tests | A known document question is answered with correct evidence; another user's files cannot be retrieved |
 | 5. Memory | Not started | User-controlled preferences, project scope, provenance, retention, review, correction, deletion | Memory is useful, scoped, and controllable; incorrect memory can be corrected |
@@ -758,14 +758,14 @@ flowchart LR
 | Permission levels with approval and denial paths | Done | `PermissionPolicy`, approval callback |
 | Per-run trace of every decision | Done | `AgentState.trace` |
 | Verification before returning a result | Done | `DefaultVerifier` |
-| Unit tests for the cycle and every limit | Done | 75 tests across `tests/` |
+| Unit tests for the cycle and every limit | Done | 171 tests across `tests/` (one needs a Postgres DSN) |
 | Task cancellation | Done (issue 5) | `orchestrator/cancellation.py` |
 | Checkpointing and resume | Done (issue 6) | `orchestrator/checkpoints.py` |
 | Task-status endpoint on the API | Done (issue 11) | `api.py` |
 | Real document-search tool | Done (issue 12) | `orchestrator/documents.py`: `search_documents` over a corpus interface |
 | Strict Pydantic tool schemas | Done (issue 2) | `StrictInput` in `orchestrator/tools.py` |
 
-**Conclusion.** Slice 2 (§21.2) is complete: the core is integrated and hardened against this specification. Remaining Phase 3 adjacent work lives in the build brief work packages (W2 completes the task API).
+**Conclusion.** Slice 2 (§21.2) is complete: the core is integrated and hardened against this specification. The task API is complete (W2); remaining work is tracked in `BUILD_BRIEF.md`.
 
 ---
 
@@ -905,10 +905,10 @@ Comparison of the shipped orchestrator against this specification. Every gap bel
 | Partial results on stop | User facing summary built from observations on every result | Closed (issue 9) |
 | Trace of every decision | `AgentState.trace`, redacted before storage and return, with persisted audit events | Closed (issue 10) |
 | Answer built only from observed results | `DefaultVerifier` joins observed results | Met (basic); a groundedness and citation check remains future work with RAG (Phase 4) |
-| Intent and planning behind replaceable interfaces | `Protocol` classes; rule-based starters | Met; model backed versions are work package W5 in `BUILD_BRIEF.md` |
+| Intent and planning behind replaceable interfaces | `Protocol` classes; rule-based starters | Met; model backed versions exist (W5) and the rule based planner remains the default |
 | Tenant and user scoping in state and tools | `TenantContext` is required by `run()` and stored on `AgentState` | Closed (issue 3) |
 | Tool-level re-authorization (§6.2 rule 4) | Handlers receive the tenant context and re-authorize inside the tool; document search filters by workspace internally | Closed (issues 3, 12) |
 | Error-handling hygiene | Imports hoisted, `_execute_step` annotated | Closed (issue 14) |
 | Documentation consistency | One canonical 10 layer model in `README.md` and `docs/architecture.md`; statuses synced to the code by work package W1 | Closed (issue 13, W1) |
 
-**What remains after Slice 2:** the work packages in `BUILD_BRIEF.md` (W2 complete task API, W3 PostgreSQL tenancy, W4 chat endpoint, W5 model backed intent and planner, W6 evaluation suite, W7 frontend, W8 real adapters behind D1 and D2), and decisions D1 to D6.
+**What remains after Slice 2:** work packages W1 to W7 of `BUILD_BRIEF.md` are merged. W8 (real adapters behind D1 and D2) is still blocked, and decisions D1 to D6 are still open.
