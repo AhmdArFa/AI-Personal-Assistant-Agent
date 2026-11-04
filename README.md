@@ -119,6 +119,7 @@ evals/                 Bilingual evaluation suite (python -m evals), a release g
 examples/demo.py       End to end demo, including the permission gate
 docs/architecture.md   The canonical 10 layer model and invariants
 docs/ai-personal-agent-blueprint-v2.md   The adopted blueprint (version 2.0 revised)
+docs/head-manager-spec.md   Proposed Head Manager product spec, subordinate to the blueprint
 ```
 
 ## Design principles
